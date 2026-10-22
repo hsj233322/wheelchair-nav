@@ -148,7 +148,10 @@ def summarize(
     violation_flags = np.asarray(violations, dtype=bool)
 
     if time.size == 0:
-        return {name: 0.0 for name in METRIC_NAMES}
+        return {
+            name: (0 if name == "collision_frames" else 0.0)
+            for name in METRIC_NAMES
+        }
 
     lengths = {
         "t": time.size,
