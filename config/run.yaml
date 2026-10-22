@@ -1,0 +1,8 @@
+# 执行层（run）：只决定“怎么跑、怎么落盘”，不是模型参数。
+# 不属于 platform / scenario / algo 三层，因此**不参与 config hash**。
+# seed 与 repeats 会写进 config.json；当前 A* 是确定性算法，seed 先记录，
+# 供后续人群布局、采样类基线使用。
+seed: 42        # 随机种子（基线；第 i 次重复使用 seed + i）
+repeats: 1      # 独立重复次数；正式实验按方案设 >= 30
+out_dir: results
+dt: 0.05        # 参考轨迹采样步长 [s]

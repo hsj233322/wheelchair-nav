@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+results/
+*.egg-info/
+
+# pytest 临时目录（TMP/TEMP 未设置时会落在项目内）
+pytest-of-*/
