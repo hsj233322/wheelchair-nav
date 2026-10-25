@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "core"
 ENV = ROOT / "env"
 
-PURE_ENV_MODULES = ("floorplan.py",)  # 只做几何/标签转换，不读配置
+PURE_ENV_MODULES = ("floorplan.py", "scene_quality.py")  # 只做几何/标签推断，不读配置
 
 
 def imports_of(path: Path) -> set[str]:

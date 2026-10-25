@@ -180,7 +180,7 @@ def test_astar_effective_params_fill_defaults() -> None:
 # HouseExpo 场景：轮廓多边形、场景内容哈希、膨胀半径
 # ---------------------------------------------------------------------------
 
-HOUSEEXPO_SCENARIO = CONFIG_ROOT / "scenarios" / "houseexpo_a24e5d6b.yaml"
+HOUSEEXPO_SCENARIO = CONFIG_ROOT / "scenarios" / "houseexpo_8bb3c35d.yaml"
 
 
 def test_polygon_scenario_loads_with_inflation() -> None:

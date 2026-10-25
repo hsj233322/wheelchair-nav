@@ -1,0 +1,43 @@
+id: narrowdoor_w100
+content_hash: 7ef5c1230c24bf214a4f2809dc419738e6c82d3fff1980f6cdd4598c6fdfdf01
+source: {dataset: synthetic, file: 'env/build_scenarios.py::_narrow_door_walls', sha256: d7cb1c92e718497d161afca365f389b8556d06468bc96ee515169ac4d51bdc3d, url: 'https://github.com/TeaganLi/HouseExpo', version: n/a, license: n/a, note: 受控门洞宽度的合成场景，用于通过性实验}
+description: 两房间 + 中间隔墙门洞 1.0 m 的受控场景（合成，非 HouseExpo 户型）；地形材质沿用 config/terrain_rules.yaml 的假设。
+map:
+  resolution: 0.05
+  shape: [88, 168]
+  origin: [0.0, 0.0]
+  walls:
+  - [0.0, 0.0, 8.4, 0.2]
+  - [0.0, 4.2, 8.4, 4.4]
+  - [0.0, 0.0, 0.2, 4.4]
+  - [8.2, 0.0, 8.4, 4.4]
+  - [4.0, 0.2, 4.2, 1.7000000000000002]
+  - [4.0, 2.7, 4.2, 4.2]
+  inflation_m: 0.7
+start: [1.2, 2.2]
+goal: [7.2, 2.2]
+terrain:
+  default: {c_rr: 0.02, slope_deg: 0.0}
+  patches: []
+  note: 基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml
+quality:
+  path_len_m: 6.05
+  door_crossings: 1
+  rooms_visited: 2
+  n_components: 1
+  unreachable_ratio: 0.0
+  largest_component_ratio: 1.0
+  min_passage_width_m: 0.95
+  min_door_width_m: 0.95
+  door_widths_m: [0.95]
+  terrain_ratios: {}
+  default_terrain_ratio: 0.0
+  grade: hard
+  group: narrow_door
+  tier_declared: passability_fixture
+  narrow_door_width_m: 1.0
+  measured_door_width_m: 0.95
+  verified_clearance_m: 0.45
+  feasible_under_frozen_A: false
+  seed: 20261326
+  note: 受控门洞宽度，供后续通过性/局部规划实验使用

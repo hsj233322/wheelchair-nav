@@ -194,6 +194,31 @@ _SCENARIO_KEYS = {
     "start",
     "goal",
     "terrain",
+    "quality",
+}
+_QUALITY_KEYS = {
+    "grade",
+    "group",
+    "tier_declared",
+    "path_len_m",
+    "door_crossings",
+    "rooms_visited",
+    "n_components",
+    "unreachable_ratio",
+    "largest_component_ratio",
+    "min_passage_width_m",
+    "min_door_width_m",
+    "door_widths_m",
+    "terrain_ratios",
+    "default_terrain_ratio",
+    "narrow_door_width_m",
+    "measured_door_width_m",
+    "verified_clearance_m",
+    "feasible_under_frozen_A",
+    "core_clearance_m",
+    "required_clearance_m",
+    "seed",
+    "note",
 }
 _MAP_KEYS = {"resolution", "shape", "origin", "walls", "polygons", "inflation_m"}
 _TERRAIN_KEYS = {"default", "patches", "note"}
@@ -307,6 +332,20 @@ def validate_scenario(doc: Mapping[str, Any]) -> dict[str, Any]:
 
     if "inflation_m" in map_doc:
         _check_number(map_doc["inflation_m"], "scenario.map.inflation_m", minimum=0.0)
+
+    if "quality" in doc:
+        quality = _require_mapping(doc["quality"], "scenario.quality")
+        _reject_unknown(quality, _QUALITY_KEYS, "scenario.quality")
+        for key, value in quality.items():
+            if isinstance(value, (dict, list)):
+                try:
+                    json.dumps(value, allow_nan=False)
+                except (TypeError, ValueError) as exc:
+                    raise ConfigError(
+                        f"scenario.quality.{key} 必须是 JSON 可序列化内容: {exc}"
+                    ) from exc
+            elif not isinstance(value, (str, int, float, bool)):
+                raise ConfigError(f"scenario.quality.{key} 类型不支持: {value!r}")
 
     start = _check_xy(doc["start"], "scenario.start")
     goal = _check_xy(doc["goal"], "scenario.goal")

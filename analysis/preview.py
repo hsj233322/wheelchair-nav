@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -98,6 +99,16 @@ def render(
     scenario = resolved.scenario
     scene = experiment.build_scene(scenario)
     setup = experiment.planner_setup(resolved.platform, resolved.algo)
+    quality = scenario.get("quality", {}) or {}
+    declared_clearance = quality.get("verified_clearance_m")
+    if declared_clearance is not None and float(declared_clearance) < setup.astar_params.d_min:
+        # 窄门场景按自己的验证口径出图（frozen_A 的 d_min 过不去）
+        setup = replace(
+            setup,
+            astar_params=replace(
+                setup.astar_params, d_min=float(declared_clearance)
+            ),
+        )
     result = experiment.plan_path(scene, setup)
 
     rows, cols = scene.occupancy.shape
@@ -141,13 +152,23 @@ def render(
         scene.goal_xy[0], scene.goal_xy[1], "*", color="#d62728", markersize=16,
         label="终点",
     )
+    grade = str(quality.get("grade", "-"))
+    doors = quality.get("door_crossings", "-")
+    rooms = quality.get("rooms_visited", "-")
     info = (
         f"resolution = {res} m    栅格 {rows} x {cols}\n"
         f"content_hash = {content_hash[:12]}…\n"
         f"inflation = {inflation_m:.2f} m (body_radius + inflation)\n"
         f"d_min = {setup.astar_params.d_min:.2f} m   e_budget = "
-        f"{setup.astar_params.e_budget:.0f} J"
+        f"{setup.astar_params.e_budget:.0f} J\n"
+        f"难度 = {grade}   跨门 = {doors}   房间 = {rooms}"
     )
+    if quality.get("group") == "narrow_door":
+        info += (
+            f"\n窄门宽度 = {quality.get('narrow_door_width_m')} m"
+            f"（实测 {quality.get('measured_door_width_m')} m）"
+            f"\nfrozen_A 可通行 = {quality.get('feasible_under_frozen_A')}"
+        )
     if result.success:
         info += (
             f"\n路径长度 = {result.length_m:.2f} m   能耗 = "
@@ -162,7 +183,8 @@ def render(
     )
     left.set_title(
         f"{scenario['id']}：占据栅格 + 膨胀层 + A* 路径\n"
-        f"hash {content_hash[:8]} | res {res} m",
+        f"难度 {grade} | 跨门 {doors} | 房间 {rooms} | res {res} m | hash "
+        f"{content_hash[:8]}",
         fontsize=11,
     )
     left.set_xlabel("x [m]")
