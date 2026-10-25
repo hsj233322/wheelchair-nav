@@ -1,16 +1,31 @@
-"""场景质量评估（纯函数）：房间分割、门洞计数、连通性、地形占比、难度分档。
+"""场景质量评估（纯函数）：房间分割、跨门/瓶颈、连通性、地形占比、难度分档。
 
-这里所有的量都是**从几何推断**的，不是数据里现成的字段：
+两类指标要分清：
 
-* HouseExpo 的 ``verts`` 是自由区轮廓，内墙表现为轮廓里宽约 0.12 m 的狭缝，
-  门洞是狭缝中断处（实测见 ``data/README.md``）。数据本身没有「墙/门」对象列表，
-  所以门洞只能从几何推断。
-* 房间分割：对 clearance 场做阈值化得到「房间核心」，再把每个自由单元分配给
-  最近的核心（等价于对距离场做 watershed）。门洞比房间窄，因此会在核心之间断开。
-* ``door_crossings``：沿路径相邻单元的房间标签变化次数（带抖动合并）。
-* 通道宽度按 ``2 * clearance`` 估计（单元中心到最近障碍物表面的距离的两倍）。
+**依赖分割的（推断，口径必须写清）**
 
-参数（``core_clearance_m`` 等）都必须由调用方传入，模块本身不读配置。
+* ``room_label_changes``：路径上**房间标签**变化次数。房间由 clearance 阈值化出的
+  「房间核心」再做最近核心归属得到（等价于对距离场做 watershed）。注意：
+  **这不是"门洞个数"**。走廊若比 ``core_clearance_m`` 窄，走廊内没有核心，
+  会被按最近核心切成若干段，于是沿走廊直行也会产生若干次标签变化
+  （实测 ``houseexpo_5427f9b0``：7 次标签变化里 5 次发生在同一条 1.50 m 宽的走廊上）。
+* ``rooms_visited``：路径经过的不同房间标签数（同上受分割影响）。
+* ``interface_widths_m`` / ``min_interface_width_m``：每次标签变化处**分界面**上的
+  ``2 x max(clearance)``；同样可能包含走廊内的切段界面，只作参考。
+
+**不依赖分割的（几何硬指标，推荐用于论文）**
+
+* ``clearance_min_m`` / ``clearance_p10_m`` / ``clearance_median_m``：路径上 clearance
+  的最小值 / 10% 分位 / 中位数 [m]；
+* ``clearance_below_090_ratio``：路径上 ``clearance < clearance_threshold_m``（默认 0.9 m）
+  的**路段长度占比**（按单元间长度加权，不是采样点计数）；
+* ``bottleneck_width_m``：起点到终点的**最宽瓶颈**宽度 [m]（二分 clearance，最大连通阈值 x2）。
+  这是"无论如何都要挤过的最窄通道"的宽度，与 A* 具体走哪条路、与房间分割都无关。
+* ``bottleneck_crossings`` / ``bottleneck_min_width_m``：沿所选路径的 clearance 局部极小
+  个数（``scipy.signal.find_peaks``，显著度 >= ``prominence_m``）与其中最窄的宽度。
+
+HouseExpo 的墙/门来自轮廓几何（见 data/README），不需要推断；下面所有量都是
+在此基础上做的几何推断，参数必须由调用方传入，模块本身不读配置。
 """
 
 from __future__ import annotations
@@ -20,11 +35,14 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 from scipy import ndimage
+from scipy.signal import find_peaks
 
 EASY = "easy"
 MEDIUM = "medium"
 HARD = "hard"
 
+DEFAULT_CLEARANCE_THRESHOLD_M = 0.9
+DEFAULT_PROMINENCE_M = 0.05
 _STRUCTURE = np.ones((3, 3), dtype=int)
 
 
@@ -41,10 +59,10 @@ def segment_rooms(
     core_clearance_m: float = 0.9,
     min_core_cells: int = 6,
 ) -> RoomSegmentation:
-    """按 clearance 场把自由区切成房间。
+    """按 clearance 场把自由区切成房间（watershed）。
 
-    ``clearance >= core_clearance_m`` 的单元构成房间核心（小于 ``min_core_cells``
-    的核心会被丢弃，避免噪声单元自成一间）；其余自由单元归属最近的核心。
+    注意走廊比 ``core_clearance_m`` 窄时走廊内没有核心，会被按最近核心切成段；
+    这会影响 ``room_label_changes`` 的口径，但不影响 clearance 系列硬指标。
     """
     clearance = np.asarray(clearance, dtype=float)
     if clearance.ndim != 2:
@@ -60,7 +78,7 @@ def segment_rooms(
     labels, _ = ndimage.label(cores, structure=_STRUCTURE)
     if min_core_cells > 1:
         sizes = np.bincount(labels.ravel())
-        small = np.flatnonzero((sizes < min_core_cells))
+        small = np.flatnonzero(sizes < min_core_cells)
         small = small[small != 0]
         if small.size:
             cores = cores & ~np.isin(labels, small)
@@ -142,7 +160,7 @@ class RoomPair:
     room_a: int
     room_b: int
     geodesic_m: float  # 近似最长跨房间测地距离（锚点取房间极点）
-    crossings: int
+    room_label_changes: int
     anchor_a: tuple[int, int]
     anchor_b: tuple[int, int]
     path_cells: np.ndarray  # (N, 2) 单元索引
@@ -156,15 +174,11 @@ def room_pair_analysis(
     *,
     max_components: int = 3,
 ) -> list[RoomPair]:
-    """逐一评估「同一连通分量内的房间对」的测地距离与跨门洞次数。
+    """逐一评估「同一连通分量内的房间对」的测地距离与标签变化次数。
 
-    锚点取房间的极点：先在 A 区里挑一个离 B 区质心最远的单元，再从它出发做
-    单源 dijkstra，取 B 区里可达最远的单元。这样得到的是**近似最长**的跨房间
-    路径（A、B 都取极点），用作"这个房间对能做出多长的任务"的估计；
-    路径上的房间标签变化次数即跨门洞次数。
-
-    只在同一 ``free_mask`` 连通分量内计算，因此结果一定可达。
-    返回按 ``(crossings, geodesic_m)`` 降序排列的房间对。
+    锚点取房间极点：先在 A 区里挑一个离 B 区质心最远的单元，再从它出发做单源
+    dijkstra，取 B 区里可达最远的单元。这样得到的是**近似最长**的跨房间路径。
+    返回按 ``(room_label_changes, geodesic_m)`` 降序排列的房间对。
     """
     from scipy.sparse.csgraph import dijkstra
 
@@ -234,13 +248,13 @@ def room_pair_analysis(
                 chain.reverse()
                 path = flat_positions[np.asarray(chain)]
                 labels_on_path = compact_labels[np.asarray(chain)]
-                crossings = int(np.count_nonzero(np.diff(labels_on_path) != 0))
+                changes = int(np.count_nonzero(np.diff(labels_on_path) != 0))
                 pairs.append(
                     RoomPair(
                         room_a=room_a,
                         room_b=room_b,
                         geodesic_m=float(distance[anchor_b]) * res,
-                        crossings=crossings,
+                        room_label_changes=changes,
                         anchor_a=tuple(int(v) for v in coordinates[anchor_a]),
                         anchor_b=tuple(int(v) for v in coordinates[anchor_b]),
                         path_cells=np.column_stack(
@@ -248,7 +262,9 @@ def room_pair_analysis(
                         ),
                     )
                 )
-    pairs.sort(key=lambda pair: (pair.crossings, pair.geodesic_m), reverse=True)
+    pairs.sort(
+        key=lambda pair: (pair.room_label_changes, pair.geodesic_m), reverse=True
+    )
     return pairs
 
 
@@ -261,9 +277,9 @@ def widest_connection_m(
 ) -> float:
     """二分 clearance，求两个区域之间「最宽连通」的通道宽度 [m]。
 
-    这是门洞宽度的几何估计：只要 A 区某个单元与 B 区某个单元在
-    ``clearance >= t`` 里同属一个连通分量，就说明存在宽度 ``2t`` 的通道。
-    小于 ``2 * 安全半径`` 时，两个区域在当前安全半径下不可达。
+    只要 A 区某个单元与 B 区某个单元在 ``clearance >= t`` 里同属一个连通分量，
+    就说明存在宽度 ``2t`` 的通道。取 A、B 各为一个单元时，得到的就是
+    **最宽瓶颈宽度**：无论怎么绕，都必须挤过的最窄通道有多宽。
     """
     clearance = np.asarray(clearance, dtype=float)
     mask_a = np.asarray(mask_a, dtype=bool)
@@ -298,15 +314,13 @@ def _collapse_short_runs(labels_along: Sequence[int], min_run: int) -> list[int]
             continue
         collapsed.append(int(label))
         run_lengths.append(1)
-    # 反复合并过短的中间游程，直到稳定
     changed = True
     while changed and len(collapsed) > 1:
         changed = False
         for index in range(1, len(collapsed) - 1):
             if run_lengths[index] < min_run:
                 left = collapsed[index - 1]
-                right = collapsed[index + 1]
-                collapsed[index] = left if left == right else left
+                collapsed[index] = left
                 run_lengths[index - 1] += run_lengths[index]
                 del collapsed[index]
                 del run_lengths[index]
@@ -315,31 +329,86 @@ def _collapse_short_runs(labels_along: Sequence[int], min_run: int) -> list[int]
     return collapsed
 
 
+def clearance_profile(
+    cells: np.ndarray,
+    clearance: np.ndarray,
+    step_length: np.ndarray | None = None,
+    *,
+    threshold_m: float = DEFAULT_CLEARANCE_THRESHOLD_M,
+    prominence_m: float = DEFAULT_PROMINENCE_M,
+) -> dict[str, Any]:
+    """路径 clearance 的分布与瓶颈（**不依赖房间分割**）。
+
+    * ``clearance_below_090_ratio`` 按单元间长度加权（不是采样点计数）；
+    * ``bottleneck_crossings`` 是 clearance 沿路径的局部极小个数
+      （``scipy.signal.find_peaks`` 的 prominence 判定），是"挤过几个窄口"的
+      分割无关版本。
+    """
+    cells = np.asarray(cells, dtype=int)
+    if cells.size == 0:
+        return {
+            "clearance_min_m": 0.0,
+            "clearance_p10_m": 0.0,
+            "clearance_median_m": 0.0,
+            "clearance_below_090_ratio": 0.0,
+            "clearance_threshold_m": float(threshold_m),
+            "bottleneck_crossings": 0,
+            "bottleneck_min_width_m": 0.0,
+            "bottleneck_widths_m": [],
+        }
+    values = np.asarray(clearance[cells[:, 0], cells[:, 1]], dtype=float)
+    if step_length is None:
+        lengths = np.ones(values.size, dtype=float)
+    else:
+        lengths = np.asarray(step_length, dtype=float).reshape(-1)
+    lengths[0] = 0.0
+    total = float(lengths.sum())
+    below = float(lengths[values < threshold_m].sum())
+    valleys, _ = find_peaks(-values, prominence=float(prominence_m))
+    widths = [2.0 * float(values[index]) for index in valleys]
+    return {
+        "clearance_min_m": float(values.min()),
+        "clearance_p10_m": float(np.percentile(values, 10)),
+        "clearance_median_m": float(np.median(values)),
+        "clearance_below_090_ratio": (below / total) if total > 0 else 0.0,
+        "clearance_threshold_m": float(threshold_m),
+        "bottleneck_crossings": int(valleys.size),
+        "bottleneck_min_width_m": min(widths) if widths else 0.0,
+        "bottleneck_widths_m": widths,
+    }
+
+
 def path_metadata(
     cells: np.ndarray,
     *,
     labels: np.ndarray,
     clearance: np.ndarray,
+    step_length: np.ndarray | None = None,
     free_mask: np.ndarray | None = None,
     min_run_cells: int = 3,
+    clearance_threshold_m: float = DEFAULT_CLEARANCE_THRESHOLD_M,
+    prominence_m: float = DEFAULT_PROMINENCE_M,
 ) -> dict[str, Any]:
-    """路径的房间/门洞/通道宽度元数据。
-
-    * ``door_crossings``：路径上房间标签的变化次数（合并短游程后的）；
-    * ``door_widths_m``：每次跨越处**分界面上**的 ``2 * max(clearance)``，
-      这是门洞宽度的几何估计（不取路径点的 clearance，避免"贴墙走"造成假窄门）；
-    * ``min_passage_width_m``：整条路径上最窄处的 ``2 * clearance``（路径属性，
-      通常贴近 ``2 * d_min``，因为最短路径会贴着安全边界走）。
-    """
+    """路径的房间标签变化与 clearance 硬指标。"""
     cells = np.asarray(cells, dtype=int)
+    profile = clearance_profile(
+        cells,
+        clearance,
+        step_length,
+        threshold_m=clearance_threshold_m,
+        prominence_m=prominence_m,
+    )
     if cells.size == 0:
-        return {
-            "rooms_visited": 0,
-            "door_crossings": 0,
-            "door_widths_m": [],
-            "min_door_width_m": 0.0,
-            "min_passage_width_m": 0.0,
-        }
+        profile.update(
+            {
+                "rooms_visited": 0,
+                "room_label_changes": 0,
+                "interface_widths_m": [],
+                "min_interface_width_m": 0.0,
+            }
+        )
+        return profile
+
     rows = cells[:, 0]
     cols = cells[:, 1]
     labels_along = [int(value) for value in labels[rows, cols]]
@@ -351,7 +420,7 @@ def path_metadata(
         component_labels, _ = ndimage.label(free_mask, structure=_STRUCTURE)
         component = component_labels == component_labels[rows[0], cols[0]]
 
-    door_widths: list[float] = []
+    interface_widths: list[float] = []
     previous = closed[0]
     for index in range(1, len(closed)):
         current = closed[index]
@@ -366,17 +435,18 @@ def path_metadata(
             mask_current, structure=_STRUCTURE
         )
         if boundary.any():
-            door_widths.append(2.0 * float(clearance[boundary].max()))
+            interface_widths.append(2.0 * float(clearance[boundary].max()))
         previous = current
 
-    path_clearance = clearance[rows, cols]
-    return {
-        "rooms_visited": int(len({value for value in closed if value > 0})),
-        "door_crossings": int(len(door_widths)),
-        "door_widths_m": door_widths,
-        "min_door_width_m": min(door_widths) if door_widths else 0.0,
-        "min_passage_width_m": float(2.0 * path_clearance.min()),
-    }
+    profile.update(
+        {
+            "rooms_visited": int(len({value for value in closed if value > 0})),
+            "room_label_changes": int(len(interface_widths)),
+            "interface_widths_m": interface_widths,
+            "min_interface_width_m": min(interface_widths) if interface_widths else 0.0,
+        }
+    )
+    return profile
 
 
 def terrain_ratios(class_grid: np.ndarray, free_mask: np.ndarray) -> dict[str, float]:
@@ -394,17 +464,21 @@ def terrain_ratios(class_grid: np.ndarray, free_mask: np.ndarray) -> dict[str, f
 def grade_scene(
     *,
     rooms_visited: int,
-    door_crossings: int,
-    min_passage_width_m: float,
+    room_label_changes: int,
+    bottleneck_width_m: float,
     narrow_passage_width_m: float = 1.2,
-    hard_door_crossings: int = 3,
+    hard_room_label_changes: int = 3,
 ) -> str:
-    """难度分档：易＝单房间；中＝跨 1~2 个门洞；难＝跨 ≥3 个门洞或过窄通道。"""
-    if door_crossings >= hard_door_crossings:
+    """难度分档：易＝单房间；中＝跨 1~2 个门洞；难＝跨 ≥3 个门洞或必经窄通道。
+
+    "跨门洞"用 ``room_label_changes``（房间标签变化次数）操作化，"必经窄通道"用
+    ``bottleneck_width_m``（最宽瓶颈宽度，分割无关）。两者口径都写在本模块 docstring。
+    """
+    if room_label_changes >= hard_room_label_changes:
         return HARD
-    if min_passage_width_m <= narrow_passage_width_m:
+    if bottleneck_width_m <= narrow_passage_width_m:
         return HARD
-    if door_crossings >= 1:
+    if room_label_changes >= 1:
         return MEDIUM
     return EASY
 
@@ -412,14 +486,21 @@ def grade_scene(
 @dataclass(frozen=True)
 class SceneQuality:
     path_len_m: float
-    door_crossings: int
+    room_label_changes: int
     rooms_visited: int
     n_components: int
     unreachable_ratio: float
     largest_component_ratio: float
-    min_passage_width_m: float
-    min_door_width_m: float
-    door_widths_m: tuple[float, ...]
+    clearance_min_m: float
+    clearance_p10_m: float
+    clearance_median_m: float
+    clearance_below_090_ratio: float
+    clearance_threshold_m: float
+    bottleneck_width_m: float
+    bottleneck_crossings: int
+    bottleneck_min_width_m: float
+    interface_widths_m: tuple[float, ...]
+    min_interface_width_m: float
     terrain_ratios: Mapping[str, float]
     default_terrain_ratio: float
     grade: str
@@ -428,14 +509,21 @@ class SceneQuality:
     def to_dict(self) -> dict[str, Any]:
         return {
             "path_len_m": round(float(self.path_len_m), 3),
-            "door_crossings": int(self.door_crossings),
+            "room_label_changes": int(self.room_label_changes),
             "rooms_visited": int(self.rooms_visited),
             "n_components": int(self.n_components),
             "unreachable_ratio": round(float(self.unreachable_ratio), 4),
             "largest_component_ratio": round(float(self.largest_component_ratio), 4),
-            "min_passage_width_m": round(float(self.min_passage_width_m), 3),
-            "min_door_width_m": round(float(self.min_door_width_m), 3),
-            "door_widths_m": [round(value, 3) for value in self.door_widths_m],
+            "clearance_min_m": round(float(self.clearance_min_m), 3),
+            "clearance_p10_m": round(float(self.clearance_p10_m), 3),
+            "clearance_median_m": round(float(self.clearance_median_m), 3),
+            "clearance_below_090_ratio": round(float(self.clearance_below_090_ratio), 4),
+            "clearance_threshold_m": round(float(self.clearance_threshold_m), 3),
+            "bottleneck_width_m": round(float(self.bottleneck_width_m), 3),
+            "bottleneck_crossings": int(self.bottleneck_crossings),
+            "bottleneck_min_width_m": round(float(self.bottleneck_min_width_m), 3),
+            "interface_widths_m": [round(value, 3) for value in self.interface_widths_m],
+            "min_interface_width_m": round(float(self.min_interface_width_m), 3),
             "terrain_ratios": {
                 key: round(float(value), 4) for key, value in self.terrain_ratios.items()
             },
@@ -451,40 +539,59 @@ def build_quality(
     labels: np.ndarray,
     clearance: np.ndarray,
     free_mask: np.ndarray,
+    step_length: np.ndarray | None = None,
     class_grid: np.ndarray | None = None,
     default_class: str = "default",
     narrow_passage_width_m: float = 1.2,
-    hard_door_crossings: int = 3,
+    hard_room_label_changes: int = 3,
+    clearance_threshold_m: float = DEFAULT_CLEARANCE_THRESHOLD_M,
 ) -> SceneQuality:
     """把几何量汇总成一个场景的质量档案。"""
     rooms = path_metadata(
-        cells, labels=labels, clearance=clearance, free_mask=free_mask
+        cells,
+        labels=labels,
+        clearance=clearance,
+        step_length=step_length,
+        free_mask=free_mask,
+        clearance_threshold_m=clearance_threshold_m,
     )
     components = component_stats(free_mask)
-    ratios = (
-        terrain_ratios(class_grid, free_mask) if class_grid is not None else {}
-    )
-    door_min = float(rooms["min_door_width_m"])
-    path_min = float(rooms["min_passage_width_m"])
-    # 判定"窄通道"时同时看门洞几何宽度与路径最窄处
-    narrow_width = min(path_min, door_min) if door_min > 0 else path_min
+    ratios = terrain_ratios(class_grid, free_mask) if class_grid is not None else {}
+
+    # 最宽瓶颈：起点与终点之间的分割无关几何量
+    cells = np.asarray(cells, dtype=int)
+    bottleneck = 0.0
+    if cells.size >= 2:
+        start_mask = np.zeros(clearance.shape, dtype=bool)
+        start_mask[cells[0, 0], cells[0, 1]] = True
+        goal_mask = np.zeros(clearance.shape, dtype=bool)
+        goal_mask[cells[-1, 0], cells[-1, 1]] = True
+        bottleneck = widest_connection_m(clearance, start_mask, goal_mask)
+
     grade = grade_scene(
         rooms_visited=int(rooms["rooms_visited"]),
-        door_crossings=int(rooms["door_crossings"]),
-        min_passage_width_m=narrow_width,
+        room_label_changes=int(rooms["room_label_changes"]),
+        bottleneck_width_m=bottleneck,
         narrow_passage_width_m=narrow_passage_width_m,
-        hard_door_crossings=hard_door_crossings,
+        hard_room_label_changes=hard_room_label_changes,
     )
     return SceneQuality(
         path_len_m=float(path_len_m),
-        door_crossings=int(rooms["door_crossings"]),
+        room_label_changes=int(rooms["room_label_changes"]),
         rooms_visited=int(rooms["rooms_visited"]),
         n_components=int(components["n_components"]),
         unreachable_ratio=float(components["unreachable_ratio"]),
         largest_component_ratio=float(components["largest_component_ratio"]),
-        min_passage_width_m=float(rooms["min_passage_width_m"]),
-        min_door_width_m=float(rooms["min_door_width_m"]),
-        door_widths_m=tuple(float(value) for value in rooms["door_widths_m"]),
+        clearance_min_m=float(rooms["clearance_min_m"]),
+        clearance_p10_m=float(rooms["clearance_p10_m"]),
+        clearance_median_m=float(rooms["clearance_median_m"]),
+        clearance_below_090_ratio=float(rooms["clearance_below_090_ratio"]),
+        clearance_threshold_m=float(rooms["clearance_threshold_m"]),
+        bottleneck_width_m=float(bottleneck),
+        bottleneck_crossings=int(rooms["bottleneck_crossings"]),
+        bottleneck_min_width_m=float(rooms["bottleneck_min_width_m"]),
+        interface_widths_m=tuple(float(v) for v in rooms["interface_widths_m"]),
+        min_interface_width_m=float(rooms["min_interface_width_m"]),
         terrain_ratios=ratios,
         default_terrain_ratio=float(ratios.get(default_class, 0.0)),
         grade=grade,

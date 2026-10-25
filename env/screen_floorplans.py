@@ -2,7 +2,7 @@
 
 用途：挑选"能做出中/难场景"的户型。HouseExpo 的自由区轮廓把每道内墙描成宽约
 0.12 m 的狭缝，门洞是狭缝中断处；把自由区按安全半径（默认
-``platform.body_radius + platform.inflation`` = 0.70 m）侵蚀后，窄门会被切断，
+``--algo`` 的 ``astar.d_min``，默认 0.70 m；物理半径 body_radius = 0.58 m）侵蚀后，窄门会被切断，
 "能否跨房间"因此取决于门洞宽度。本工具把这件事量化，输出一张 CSV。
 
 ```bash
@@ -15,8 +15,8 @@ uv run python -m env.screen_floorplans --out docs/floorplan_screening.csv
 * ``free_cells`` / ``eroded_cells``：轮廓内自由单元数 / 侵蚀后仍可行单元数；
 * ``n_components`` / ``unreachable_ratio``：侵蚀后可行区的连通分量数与不可达占比；
 * ``seg_rooms``：clearance 分割出的房间数；
-* ``cross_room_m`` / ``crossings``：**最远**的跨房间测地距离及其路径上的跨门次数；
-* ``max_crossings`` / ``crossings_len_m``：**跨门次数最多**的房间对及其测地距离；
+* ``cross_room_m`` / ``room_label_changes``：**最远**的跨房间测地距离及其路径上的房间标签变化次数；
+* ``max_room_label_changes`` / ``changes_len_m``：**标签变化最多**的房间对及其测地距离；
 * ``widest_door_m``：该房间对之间最宽连通通道的宽度 [m]；小于 2 x 安全半径
   意味着在当前安全半径下不可达。
 """
@@ -50,9 +50,9 @@ CSV_COLUMNS = (
     "unreachable_ratio",
     "seg_rooms",
     "cross_room_m",
-    "crossings",
-    "max_crossings",
-    "crossings_len_m",
+    "room_label_changes",
+    "max_room_label_changes",
+    "changes_len_m",
     "widest_door_m",
 )
 
@@ -89,9 +89,9 @@ def screen_one(
         "unreachable_ratio": round(float(components["unreachable_ratio"]), 4),
         "seg_rooms": int(segmentation.room_count),
         "cross_room_m": 0.0,
-        "crossings": 0,
-        "max_crossings": 0,
-        "crossings_len_m": 0.0,
+        "room_label_changes": 0,
+        "max_room_label_changes": 0,
+        "changes_len_m": 0.0,
         "widest_door_m": 0.0,
     }
     if not eroded.any() or segmentation.room_count < 2:
@@ -104,13 +104,13 @@ def screen_one(
         return row
 
     farthest = max(pairs, key=lambda pair: pair.geodesic_m)
-    most_crossings = max(pairs, key=lambda pair: (pair.crossings, pair.geodesic_m))
-    mask_a = segmentation.labels == most_crossings.room_a
-    mask_b = segmentation.labels == most_crossings.room_b
+    most_changes = max(pairs, key=lambda pair: (pair.room_label_changes, pair.geodesic_m))
+    mask_a = segmentation.labels == most_changes.room_a
+    mask_b = segmentation.labels == most_changes.room_b
     row["cross_room_m"] = round(farthest.geodesic_m, 2)
-    row["crossings"] = int(farthest.crossings)
-    row["max_crossings"] = int(most_crossings.crossings)
-    row["crossings_len_m"] = round(most_crossings.geodesic_m, 2)
+    row["room_label_changes"] = int(farthest.room_label_changes)
+    row["max_room_label_changes"] = int(most_changes.room_label_changes)
+    row["changes_len_m"] = round(most_changes.geodesic_m, 2)
     row["widest_door_m"] = round(
         scene_quality.widest_connection_m(clearance, mask_a, mask_b), 2
     )
@@ -129,10 +129,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resolution", type=float, default=0.1)
     parser.add_argument("--core-clearance-m", type=float, default=0.9)
     parser.add_argument(
+        "--algo",
+        default="configs/frozen_A.yaml",
+        help="按该 algo 配置的 astar.d_min 作为筛查口径（与场景分档一致）",
+    )
+    parser.add_argument(
         "--required-clearance-m",
         type=float,
         default=None,
-        help="默认取 platform.body_radius + platform.inflation",
+        help="覆盖筛查口径；默认取 --algo 的 astar.d_min，传 platform.body_radius 可换成纯物理口径",
     )
     parser.add_argument("--max-files", type=int, default=0, help="0 表示全部")
     return parser
@@ -143,10 +148,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     platform = config_module.validate_platform(
         config_module.read_config(CONFIG_ROOT / "platform.yaml")
     )
+    algo = config_module.validate_algo(
+        config_module.read_config(
+            config_module.resolve_input(args.algo, CONFIG_ROOT)
+        )
+    )
     required = (
         float(args.required_clearance_m)
         if args.required_clearance_m is not None
-        else float(platform["body_radius"]) + float(platform["inflation"])
+        else float(config_module.astar_effective_params(algo, platform)["d_min"])
     )
     files = sorted(Path(args.data_dir).glob("*.json"))
     if args.max_files > 0:
@@ -173,13 +183,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             if (index + 1) % 25 == 0:
                 print(f"  screened {index + 1}/{len(files)}", file=sys.stderr)
 
-    cross_room = [row for row in rows if row["cross_room_m"] >= 8.0 and row["crossings"] >= 1]
-    hard = [row for row in rows if row["max_crossings"] >= 3 and row["crossings_len_m"] >= 8.0]
+    cross_room = [
+        row for row in rows
+        if row["cross_room_m"] >= 8.0 and row["room_label_changes"] >= 1
+    ]
+    hard = [
+        row for row in rows
+        if row["max_room_label_changes"] >= 3 and row["changes_len_m"] >= 8.0
+    ]
     print(
         f"screened {len(rows)} floorplans at required clearance {required:.2f} m "
         f"-> {out_path}\n"
         f"cross-room >= 8 m with >= 1 crossing: {len(cross_room)}; "
-        f">= 3 crossings with >= 8 m: {len(hard)}"
+        f">= 3 room-label changes with >= 8 m: {len(hard)}"
     )
     return 0
 

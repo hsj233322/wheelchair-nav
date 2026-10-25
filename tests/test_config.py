@@ -189,7 +189,8 @@ def test_polygon_scenario_loads_with_inflation() -> None:
     )
     assert "polygons" in resolved.scenario["map"]
     assert "walls" not in resolved.scenario["map"]
-    assert resolved.scenario["map"]["inflation_m"] == 0.7
+    # 解耦后场景只声明物理半径 body_radius = 0.58
+    assert resolved.scenario["map"]["inflation_m"] == pytest.approx(0.58)
     assert resolved.scenario["source"]["dataset"] == "HouseExpo"
     assert resolved.scenario["content_hash"]
 

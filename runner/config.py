@@ -161,7 +161,6 @@ _PLATFORM_FIELDS: dict[str, tuple[float, bool]] = {
     "mass": (0.0, False),
     "g": (0.0, False),
     "body_radius": (0.0, False),
-    "inflation": (0.0, True),
     "v_max": (0.0, False),
     "w_max": (0.0, False),
     "a_max": (0.0, False),
@@ -201,22 +200,32 @@ _QUALITY_KEYS = {
     "group",
     "tier_declared",
     "path_len_m",
-    "door_crossings",
+    "room_label_changes",
     "rooms_visited",
     "n_components",
     "unreachable_ratio",
     "largest_component_ratio",
-    "min_passage_width_m",
-    "min_door_width_m",
-    "door_widths_m",
+    "clearance_min_m",
+    "clearance_p10_m",
+    "clearance_median_m",
+    "clearance_below_090_ratio",
+    "clearance_threshold_m",
+    "bottleneck_width_m",
+    "bottleneck_crossings",
+    "bottleneck_min_width_m",
+    "interface_widths_m",
+    "min_interface_width_m",
     "terrain_ratios",
     "default_terrain_ratio",
     "narrow_door_width_m",
     "measured_door_width_m",
     "verified_clearance_m",
-    "feasible_under_frozen_A",
-    "core_clearance_m",
+    "feasible_at_physical_radius",
+    "feasible_at_base_d_min",
+    "physical_radius_m",
+    "base_d_min_m",
     "required_clearance_m",
+    "core_clearance_m",
     "seed",
     "note",
 }
@@ -452,7 +461,17 @@ def validate_run(doc: Mapping[str, Any]) -> dict[str, Any]:
 def validate_cross(
     platform: Mapping[str, Any], scenario: Mapping[str, Any], algo: Mapping[str, Any]
 ) -> None:
-    """跨层一致性：场景声明的安全半径与 algo 的约束不能互相矛盾。"""
+    """跨层一致性。
+
+    参数归属（2026-10-25 解耦）：
+
+    * platform.body_radius 是**物理**外接圆半径，用于地图膨胀与碰撞判定；
+    * algo.astar.d_min 是**策略**安全半径（含物理半径 + 裕度），是实验变量；
+    * scenario.map.inflation_m 记录该场景要求的最小物理膨胀半径（= body_radius）。
+
+    因此这里只要求 ``d_min >= body_radius``（不能比车身还小），
+    以及 ``d_min >= map.inflation_m``（不能违反场景声明的物理半径）。
+    """
     astar = algo["astar"]
     d_min = float(astar["d_min"])
     body_radius = float(platform["body_radius"])
@@ -464,8 +483,8 @@ def validate_cross(
     inflation_m = scenario.get("map", {}).get("inflation_m")
     if inflation_m is not None and float(inflation_m) > d_min + 1e-9:
         raise ConfigError(
-            f"场景声明的安全半径 scenario.map.inflation_m = {inflation_m} "
-            f"大于 algo.astar.d_min = {d_min}；规划器会给出贴着障碍物的路径"
+            f"场景声明的物理膨胀半径 scenario.map.inflation_m = {inflation_m} "
+            f"大于 algo.astar.d_min = {d_min}；规划器会给出撞到障碍物的路径"
         )
     v_cruise = float(astar.get("v_cruise", platform["v_max"]))
     if v_cruise > float(platform["v_max"]) + 1e-9:

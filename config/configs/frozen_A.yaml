@@ -4,7 +4,8 @@ id: frozen_A
 
 astar:
   e_budget: 2000.0        # 累计电能预算 [J]，硬约束
-  d_min: 0.7              # 车身中心到障碍物的最小距离 [m]，硬约束
+  d_min: 0.7              # 策略安全半径 [m] = platform.body_radius(0.58) + 裕度(0.12)，硬约束
+                          # 参数扫描见 configs/dmin_sweep/（0.58 / 0.70 / 0.90 / 1.10）
   kappa_max: 1.5          # 曲率上限 [1/m]，经 kappa_window_m 折算为搜索侧单步转角上限
   kappa_window_m: 0.6     # 曲率窗口长度 [m]：max_turn = kappa_max * kappa_window_m
   v_cruise: 1.0           # 全局路径的名义巡航速度 [m/s]，不得超过 platform.v_max

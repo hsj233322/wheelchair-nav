@@ -34,9 +34,8 @@ def test_scenario_is_free_and_solvable(path: Path) -> None:
     resolved = config_module.load_resolved("configs/frozen_A.yaml", path)
     scenario = resolved.scenario
     assert scenario["content_hash"] == config_module.compute_scenario_hash(scenario)
-    assert scenario["map"]["inflation_m"] == pytest.approx(
-        float(PLATFORM["body_radius"]) + float(PLATFORM["inflation"])
-    )
+    # 解耦后场景只声明物理半径（body_radius），策略裕度在 algo.astar.d_min
+    assert scenario["map"]["inflation_m"] == pytest.approx(float(PLATFORM["body_radius"]))
 
     scene = experiment.build_scene(scenario)
     setup = experiment.planner_setup(resolved.platform, resolved.algo)
@@ -67,7 +66,7 @@ def test_scenario_is_free_and_solvable(path: Path) -> None:
         class_grid=None,
         default_class="concrete",
     )
-    assert recomputed.door_crossings == quality["door_crossings"]
+    assert recomputed.room_label_changes == quality["room_label_changes"]
     assert recomputed.rooms_visited == quality["rooms_visited"]
     assert recomputed.grade == quality["grade"]
     assert recomputed.path_len_m == pytest.approx(quality["path_len_m"], abs=1e-3)
@@ -83,12 +82,13 @@ def test_all_three_difficulty_tiers_are_represented() -> None:
     assert sum(grades.values()) == len(SCENARIOS)
 
 
-def test_hard_scenarios_cross_at_least_three_doors() -> None:
+def test_hard_scenarios_have_three_or_more_room_label_changes() -> None:
     for path in SCENARIOS:
         quality = config_module.read_config(path)["quality"]
         if quality["grade"] == scene_quality.HARD:
-            assert quality["door_crossings"] >= 3
+            assert quality["room_label_changes"] >= 3
             assert quality["path_len_m"] >= 8.0
+            assert quality["bottleneck_width_m"] > 1.2  # 分割无关的硬指标也要能复算
 
 
 def test_scenarios_have_distinct_content_hashes() -> None:
@@ -110,17 +110,38 @@ def test_metadata_csv_matches_scenarios() -> None:
         )
 
 
-def test_narrow_door_scenarios_are_infeasible_under_frozen_A() -> None:
+def test_narrow_door_scenarios_have_two_feasibility_flags() -> None:
+    body_radius = float(PLATFORM["body_radius"])
+    physically_ok = 0
     for path in NARROW:
         resolved = config_module.load_resolved("configs/frozen_A.yaml", path)
         quality = resolved.scenario["quality"]
-        assert quality["feasible_under_frozen_A"] is False
-        assert quality["narrow_door_width_m"] < 2.0 * float(PLATFORM["body_radius"]) + 2.0 * float(
-            PLATFORM["inflation"]
-        )
+        width = float(quality["narrow_door_width_m"])
+        assert quality["feasible_at_physical_radius"] == (width >= 2.0 * body_radius)
+        assert quality["feasible_at_base_d_min"] is False
+        physically_ok += int(quality["feasible_at_physical_radius"])
         scene = experiment.build_scene(resolved.scenario)
         setup = experiment.planner_setup(resolved.platform, resolved.algo)
         assert not experiment.plan_path(scene, setup).success
+    # 1.2 m 门洞对物理半径（1.16 m）已够宽、对基准 d_min（1.40 m）不够：
+    # 这正是通过性实验要测的边界
+    assert physically_ok == 1
+
+
+def test_platform_has_no_policy_margin_and_scenarios_use_physical_radius() -> None:
+    platform = config_module.validate_platform(
+        config_module.read_config(CONFIG_ROOT / "platform.yaml")
+    )
+    assert "inflation" not in platform  # 策略裕度已移到 algo.astar.d_min
+    for path in SCENARIOS:
+        scenario = config_module.read_config(path)
+        assert scenario["map"]["inflation_m"] == pytest.approx(
+            float(platform["body_radius"])
+        )
+        assert scenario["quality"]["physical_radius_m"] == pytest.approx(
+            float(platform["body_radius"])
+        )
+        assert scenario["quality"]["base_d_min_m"] == pytest.approx(0.70)
 
 
 def test_polygon_area_is_consistent_with_rasterization() -> None:

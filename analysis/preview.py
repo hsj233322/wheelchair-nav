@@ -5,9 +5,11 @@ uv run python -m analysis.preview config/scenarios/houseexpo_7e80c5f4.yaml
 uv run python -m analysis.preview config/scenarios/houseexpo_*.yaml --out-dir docs/preview
 ```
 
-左图：占据栅格（深色为障碍/轮廓外）+ 膨胀层（红色带，宽度来自
-``platform.body_radius + platform.inflation``，同时记录在场景的 ``map.inflation_m``）
-+ A* 路径 + 起终点；图上标注 resolution、场景内容哈希与规划量。
+左图：占据栅格（深色为障碍/轮廓外）+ **物理半径层**（深红，来自场景
+``map.inflation_m = platform.body_radius``）+ **策略裕度层**（橙色，物理半径到
+``algo.astar.d_min`` 之间）+ A* 路径 + 起终点；图上标注 resolution、场景内容哈希、
+两个半径与规划量。指定非默认 ``--algo``（如 ``configs/dmin_sweep/dmin_110.yaml``）时
+输出文件名会加 ``__dmin_110`` 后缀，方便同一场景跨档位对比。
 右图：地形分区（房间类型映射的假设材质），用于核对标签是否落在合理房间上。
 
 只画静态 PNG，不做动画 / GUI。
@@ -115,15 +117,15 @@ def render(
     res = scene.resolution
     ox, oy = scene.origin
     extent = (ox, ox + cols * res, oy, oy + rows * res)
-    inflation_m = float(
-        scenario["map"].get("inflation_m", setup.astar_params.d_min)
-    )
+    # 场景层只声明物理半径；d_min 来自 algo，两者分开画
+    physical_m = float(scenario["map"].get("inflation_m", 0.0))
+    policy_m = float(setup.astar_params.d_min)
     content_hash = str(scenario.get("content_hash", "-"))
 
     _setup_fonts()
     figure, (left, right) = plt.subplots(1, 2, figsize=(15, 7.5), constrained_layout=True)
 
-    # 左图：栅格 + 膨胀层 + 路径
+    # 左图：栅格 + 物理半径层 + 策略裕度层 + 路径
     left.imshow(
         scene.occupancy.astype(float),
         origin="lower",
@@ -131,9 +133,14 @@ def render(
         cmap=ListedColormap(["#ffffff", "#3b3b3b"]),
         interpolation="nearest",
     )
-    inflated = (~scene.occupancy) & (scene.clearance + 1e-9 < inflation_m)
     overlay = np.zeros((rows, cols, 4), dtype=float)
-    overlay[inflated] = (0.85, 0.10, 0.10, 0.30)
+    free = ~scene.occupancy
+    collision = free & (scene.clearance + 1e-9 < physical_m)
+    policy = free & (scene.clearance + 1e-9 >= physical_m) & (
+        scene.clearance + 1e-9 < policy_m
+    )
+    overlay[collision] = (0.75, 0.05, 0.05, 0.45)   # 车身进不去
+    overlay[policy] = (0.95, 0.65, 0.15, 0.35)      # 物理可行、但被 d_min 排除
     left.imshow(overlay, origin="lower", extent=extent, interpolation="nearest")
     if result.success:
         left.plot(
@@ -152,28 +159,35 @@ def render(
         scene.goal_xy[0], scene.goal_xy[1], "*", color="#d62728", markersize=16,
         label="终点",
     )
+    left.plot([], [], "s", color=(0.75, 0.05, 0.05, 0.45),
+              label=f"物理半径 {physical_m:.2f} m（车身）")
+    left.plot([], [], "s", color=(0.95, 0.65, 0.15, 0.35),
+              label=f"策略裕度至 d_min {policy_m:.2f} m")
     grade = str(quality.get("grade", "-"))
-    doors = quality.get("door_crossings", "-")
+    label_changes = quality.get("room_label_changes", "-")
     rooms = quality.get("rooms_visited", "-")
     info = (
         f"resolution = {res} m    栅格 {rows} x {cols}\n"
         f"content_hash = {content_hash[:12]}…\n"
-        f"inflation = {inflation_m:.2f} m (body_radius + inflation)\n"
-        f"d_min = {setup.astar_params.d_min:.2f} m   e_budget = "
-        f"{setup.astar_params.e_budget:.0f} J\n"
-        f"难度 = {grade}   跨门 = {doors}   房间 = {rooms}"
+        f"physical (scenario) = {physical_m:.2f} m   d_min (algo) = {policy_m:.2f} m\n"
+        f"e_budget = {setup.astar_params.e_budget:.0f} J\n"
+        f"难度 = {grade}  房间标签变化 = {label_changes}  房间数 = {rooms}"
     )
     if quality.get("group") == "narrow_door":
         info += (
             f"\n窄门宽度 = {quality.get('narrow_door_width_m')} m"
             f"（实测 {quality.get('measured_door_width_m')} m）"
-            f"\nfrozen_A 可通行 = {quality.get('feasible_under_frozen_A')}"
+            f"\n物理半径可通行 = {quality.get('feasible_at_physical_radius')}"
+            f"  基准 d_min 可通行 = {quality.get('feasible_at_base_d_min')}"
         )
     if result.success:
+        below = quality.get("clearance_below_090_ratio")
         info += (
             f"\n路径长度 = {result.length_m:.2f} m   能耗 = "
             f"{result.total_energy_j:.1f} J\n最小离障 = {result.clearance.min():.2f} m"
         )
+        if below is not None:
+            info += f"   clearance<0.9 占比 = {float(below):.2f}"
     else:
         info += f"\n规划失败: {result.reason}"
     left.text(
@@ -182,9 +196,9 @@ def render(
         bbox=dict(boxstyle="round", facecolor="white", alpha=0.85, edgecolor="0.6"),
     )
     left.set_title(
-        f"{scenario['id']}：占据栅格 + 膨胀层 + A* 路径\n"
-        f"难度 {grade} | 跨门 {doors} | 房间 {rooms} | res {res} m | hash "
-        f"{content_hash[:8]}",
+        f"{scenario['id']}：栅格 + 物理半径 + 策略裕度 + A* 路径\n"
+        f"难度 {grade} | d_min {policy_m:.2f} m | 房间标签变化 {label_changes} | "
+        f"房间 {rooms} | res {res} m | hash {content_hash[:8]}",
         fontsize=11,
     )
     left.set_xlabel("x [m]")
@@ -225,7 +239,10 @@ def render(
         fontsize=8,
     )
 
-    out_path = Path(out_dir) / f"{scenario['id']}.png"
+    # 非默认 algo（例如 configs/dmin_sweep/dmin_058.yaml）时给文件名加后缀，
+    # 便于同一场景在不同 d_min 档位下并存对比。
+    suffix = "" if str(algo) == DEFAULT_ALGO else f"__{Path(algo).stem}"
+    out_path = Path(out_dir) / f"{scenario['id']}{suffix}.png"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(figure)
@@ -235,7 +252,7 @@ def render(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m analysis.preview",
-        description="场景预览图：栅格 + 膨胀层 + 起终点 + A* 路径 + 地形分区",
+        description="场景预览图：栅格 + 物理半径 + 策略裕度 + 起终点 + A* 路径 + 地形",
     )
     parser.add_argument("scenarios", nargs="+", help="场景 YAML 路径（可给多个）")
     parser.add_argument("--algo", default=DEFAULT_ALGO)

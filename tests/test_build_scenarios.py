@@ -108,12 +108,14 @@ def test_build_easy_scenario(tmp_path: Path) -> None:
     config_module.validate_scenario(scenario)
     quality = scenario["quality"]
     assert quality["grade"] == scene_quality.EASY
-    assert quality["door_crossings"] == 0
+    assert quality["room_label_changes"] == 0
     assert quality["rooms_visited"] == 1
     assert quality["path_len_m"] >= 4.0
     assert quality["group"] == "houseexpo"
     assert quality["tier_declared"] == scene_quality.EASY
-    assert scenario["map"]["inflation_m"] == pytest.approx(0.70)
+    # 场景只声明物理半径；策略裕度在 algo.astar.d_min
+    assert scenario["map"]["inflation_m"] == pytest.approx(0.58)
+    assert quality["base_d_min_m"] == pytest.approx(0.70)
     assert info["tier"] == scene_quality.EASY
 
 
@@ -122,10 +124,12 @@ def test_build_medium_scenario_crosses_a_door(tmp_path: Path) -> None:
     config_module.validate_scenario(scenario)
     quality = scenario["quality"]
     assert quality["grade"] == scene_quality.MEDIUM
-    assert quality["door_crossings"] == 1
+    assert quality["room_label_changes"] == 1
     assert quality["rooms_visited"] == 2
     assert quality["path_len_m"] >= 8.0
-    assert quality["min_door_width_m"] > 1.4
+    assert quality["min_interface_width_m"] > 1.4
+    # 保守 clearance 定义（减半个单元）让 1.6 m 走廊实测为 1.5 m
+    assert quality["bottleneck_width_m"] == pytest.approx(1.5, abs=0.1)
 
 
 def test_declared_tier_is_enforced(tmp_path: Path) -> None:
@@ -161,7 +165,7 @@ def test_scenario_is_solvable_and_quality_matches_replay(tmp_path: Path) -> None
         class_grid=None,
         default_class="concrete",
     )
-    assert quality.to_dict()["door_crossings"] == scenario["quality"]["door_crossings"]
+    assert quality.to_dict()["room_label_changes"] == scenario["quality"]["room_label_changes"]
     assert quality.to_dict()["path_len_m"] == pytest.approx(
         scenario["quality"]["path_len_m"], abs=1e-3
     )
@@ -199,13 +203,14 @@ def test_narrow_floorplan_is_skipped(tmp_path: Path) -> None:
 
 
 def test_inflation_larger_than_d_min_is_rejected(tmp_path: Path) -> None:
+    # d_min 低于物理半径 body_radius=0.58 必须被拒（解耦后这是唯一的物理下界）
     tight_algo = config_module.validate_algo(
         {
             "id": "tight",
-            "astar": {"e_budget": 2000.0, "d_min": 0.6, "kappa_max": 1.5, "v_cruise": 1.0},
+            "astar": {"e_budget": 2000.0, "d_min": 0.5, "kappa_max": 1.5, "v_cruise": 1.0},
         }
     )
-    with pytest.raises(config_module.ConfigError, match="inflation"):
+    with pytest.raises(config_module.ConfigError, match="body_radius"):
         build(tmp_path, ROOM, tier=scene_quality.EASY, algorithm=tight_algo)
 
 
@@ -255,7 +260,11 @@ def test_narrow_door_scenarios(tmp_path: Path, width: float) -> None:
     # 实测门洞宽度 = 设计宽度 - 一个单元（clearance 定义本身偏保守半格）
     assert quality["measured_door_width_m"] == pytest.approx(width - resolution, abs=resolution)
     assert quality["verified_clearance_m"] == pytest.approx(width / 2 - resolution)
-    assert quality["feasible_under_frozen_A"] is False  # 三个宽度都小于 2 x 0.7 m
+    # 解耦后两个口径分开记录：物理半径 0.58 m、基准 d_min 0.70 m
+    assert quality["physical_radius_m"] == pytest.approx(0.58)
+    assert quality["base_d_min_m"] == pytest.approx(0.70)
+    assert quality["feasible_at_physical_radius"] == (width >= 2 * 0.58)
+    assert quality["feasible_at_base_d_min"] is False  # 三档都小于 2 x 0.70 m
 
     # 用验证口径规划必须成功；用 frozen_A 的 d_min 必须失败
     resolved = config_module.load_resolved(
@@ -340,5 +349,5 @@ def test_cli_writes_scenarios_and_metadata(
     assert len(rows) == 1
     assert rows[0]["id"] == scenario["id"]
     assert rows[0]["grade"] == scene_quality.MEDIUM
-    assert int(rows[0]["door_crossings"]) == 1
+    assert int(rows[0]["room_label_changes"]) == 1
     assert "generated 1 scenes" in capsys.readouterr().out

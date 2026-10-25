@@ -17,12 +17,15 @@ HouseExpo 真实户型场景（数据子集需先按 `data/README.md` 下载）�
 
 ```bash
 uv run python -m env.screen_floorplans                    # 筛查 260 个候选 -> docs/floorplan_screening.csv
-uv run python -m env.build_scenarios                      # 分档采样 -> config/scenarios/houseexpo_*.yaml + 窄门组
+uv run python -m env.build_scenarios                      # 分档采样 -> config/scenarios/*.yaml + 窄门组
+uv run python -m analysis.dmin_sweep                      # d_min 四档扫描 -> docs/dmin_sweep.csv
 uv run python -m analysis.preview config/scenarios/houseexpo_*.yaml   # 出图 -> docs/preview/
+uv run python -m analysis.preview config/scenarios/houseexpo_5427f9b0.yaml \
+    --algo configs/dmin_sweep/dmin_110.yaml               # 指定档位出图（文件名带 __dmin_110 后缀）
 ```
 
-场景质量档案汇总在 `docs/scene_metadata.csv`（每个场景一行：路径长度、跨门次数、房间数、
-连通分量数、不可达占比、门洞宽度、地形占比、难度档）。
+场景质量档案汇总在 `docs/scene_metadata.csv`（每个场景一行：路径长度、房间标签变化、
+房间数、连通分量数、不可达占比、clearance 分布、最宽瓶颈、地形占比、难度档）。
 
 最后一条会在 `results/<run_id>/` 下产出：
 
@@ -47,23 +50,26 @@ wheelchair-nav/
     scenario_selection.yaml# 场景选取（按难度档指定要固化的户型，依据筛查 CSV）
     scenarios/             # 第 2 层：house_01（手写）+ houseexpo_*（真实户型）+ narrowdoor_*（窄门）
     configs/frozen_A.yaml  # 第 3 层：算法（唯一允许变化的层）
+    configs/dmin_sweep/    # d_min 四档（0.58/0.70/0.90/1.10），只改 astar.d_min
   core/                    # 纯函数，不 import config / runner
     astar.py               # 约束化 A*（离障 + 能耗预算 + 曲率窗口）
     energy.py              # 滚阻 / 坡度 / 惯性 / 传动效率 / 电池内阻
     metrics.py             # 指标口径
   env/                     # 公开数据集 -> core 能吃的数组
     floorplan.py           # HouseExpo JSON -> 占据栅格 + 地形标签（纯函数）
-    scene_quality.py       # 房间分割 / 跨门计数 / 门洞宽度 / 难度分档（纯函数，全部为几何推断）
+    scene_quality.py       # 房间分割 / 标签变化 / clearance 硬指标 / 难度分档（纯函数）
     screen_floorplans.py   # 批量筛查户型能否跨房间 -> docs/floorplan_screening.csv
     build_scenarios.py     # 户型 -> 冻结场景 YAML（分档采样 + A* 验证 + 质量档案 + 内容哈希）
   runner/
     config.py              # 三层加载、严格校验、config hash、场景哈希
     experiment.py          # 一个 spec -> 一批 run -> 落盘
   analysis/
-    preview.py             # 一条命令出图：栅格 + 膨胀层 + 起终点 + A* 路径 + 地形 + 难度
+    preview.py             # 一条命令出图：栅格 + 物理半径 + 策略裕度 + A* 路径 + 地形
+    dmin_sweep.py          # d_min 档位扫描 -> docs/dmin_sweep.csv + 对比表
   data/                    # HouseExpo 候选池（不进 git；来源与取样规则见 data/README.md）
   docs/preview/            # 里程碑验收图
   docs/scene_metadata.csv  # 场景质量元数据表
+  docs/dmin_sweep.csv      # d_min 扫描逐场景明细
   docs/floorplan_screening.csv  # 260 个候选户型的筛查结果
   tests/
   results/                 # 每次运行一个目录（git 忽略）
@@ -115,26 +121,43 @@ config hash 只覆盖 platform + scenario + algo。换 seed 重跑，hash 不变
   数据里没有独立的「墙/门」对象列表，所以下面这些量是**我们的几何推断**：
   * **房间**：`clearance >= core_clearance_m`（默认 0.9 m）作房间核心，其余自由单元
     归属最近核心（等价于对距离场做 watershed）。门洞比房间窄，因此在核心之间断开；
-  * **跨门洞次数**：路径上房间标签的变化次数（连续 <3 格的短游程会被合并，压抖动）；
-  * **门洞宽度**：两房间**分界面**上最大 clearance 的 2 倍（区域级二分也能得到同样结果），
-    比"路径点 clearance"可靠——最短路径会贴着安全边界走，用路径点会得到假窄门。
-- **膨胀半径**：`inflation_m = platform.body_radius + platform.inflation`（当前
-  0.58 + 0.12 = 0.70 m），由 `env/build_scenarios.py` 算好并写进场景的
-  `map.inflation_m`，不写死在任何代码里。runner 校验 `algo.astar.d_min >= inflation_m`。
-  A* 的 clearance 硬约束在数学上等价于按该半径膨胀栅格，所以场景里**不另存一份膨胀栅格**，
-  避免把安全半径重复计算两次；预览图里的红色带就是这个膨胀层。
+  * **`room_label_changes`**：路径上**房间标签**变化次数（连续 <3 格的短游程会被合并）。
+    **它不等于门洞个数**：走廊若比 0.9 m 窄，走廊内没有核心，会被 watershed 按最近核心
+    切成若干段。实测 `houseexpo_5427f9b0`：7 次标签变化里有 5 次发生在同一条 1.50 m
+    宽的走廊上（该走廊 clearance 恒为 0.750 m < 0.9 m）。论文里引用时必须按这个口径写；
+  * **`interface_widths_m` / `min_interface_width_m`**：每次标签变化处分界面上的
+    `2 x max(clearance)`，同样可能包含走廊切段，只作参考。
+- **不依赖房间分割的硬指标**（推荐作为论文主指标）：
+  * `clearance_min_m` / `clearance_p10_m` / `clearance_median_m`：路径 clearance 的最小值 /
+    10% 分位 / 中位数；
+  * `clearance_below_090_ratio`：路径上 `clearance < clearance_threshold_m`（默认 0.9 m）
+    的**路段长度占比**（按单元间长度加权）；
+  * `bottleneck_width_m`：起点到终点的**最宽瓶颈**宽度（对 clearance 做二分，
+    最大连通阈值 x2）。这是"无论怎么绕都必须挤过的最窄通道"，与 A* 走哪条路、
+    与房间分割都无关；
+  * `bottleneck_crossings` / `bottleneck_min_width_m`：沿路径 clearance 局部极小的个数
+    （`scipy.signal.find_peaks` + 显著度）与其中最窄宽度。
+- **参数归属（2026-10-25 解耦）**：场景层只声明**物理**外接圆半径
+  `map.inflation_m = platform.body_radius`（0.58 m，用于地图膨胀与碰撞判定）；
+  **策略**安全半径 `algo.astar.d_min`（默认 0.70 m = 0.58 + 0.12 裕度）是算法层参数，
+  也是实验变量，档位配置在 `config/configs/dmin_sweep/`。跨层校验只要求
+  `d_min >= body_radius`（以及 `d_min >= map.inflation_m`）；调大 d_min 不再被场景拖住。
+  A* 的 clearance 硬约束在数学上等价于按该半径膨胀栅格，所以场景里**不另存膨胀栅格**。
+  预览图里深红带是物理半径、橙色带是物理半径到 d_min 之间的策略裕度。
 - **地形标签是假设**：HouseExpo 只有几何、没有地面材质。材质按房间类型映射
   （厨房/卫生间 -> 瓷砖，卧室/客厅 -> 木地板，走廊/门厅/未标注 -> 水泥），规则写在
   `config/terrain_rules.yaml`，场景里带 `terrain.note` 声明。**这不是实测数据**，
   论文中必须按假设表述，并配合 `c_rr` 敏感性分析使用。
-- **场景难度分档**（`env/scene_quality.py::grade_scene`）：易＝不跨门；
-  中＝跨 1~2 个门洞；难＝跨 ≥3 个门洞或必经宽度 ≤1.2 m 的通道。
+- **场景难度分档**（`env/scene_quality.py::grade_scene`，在基准 d_min = 0.70 m 下评定）：
+  易＝同房间（标签变化 0）；中＝标签变化 1~2；难＝标签变化 ≥3 或最宽瓶颈 ≤1.2 m。
   起终点采样按档位区分：easy 在同一房间内采样且路径 ≥4 m，medium/hard 在不同房间之间
-  采样且路径 ≥8 m，全部用 `core.astar` 验证有解，不达标就跳过（`config/scenario_selection.yaml`）。
+  采样且路径 ≥8 m，全部用 `core.astar` 在基准 d_min 下验证有解，不达标就跳过
+  （`config/scenario_selection.yaml`）。
 - **窄门组**：`narrowdoor_w080/w100/w120` 是受控门洞（0.8/1.0/1.2 m）的**合成**场景，
-  供后续通过性实验使用。它们按 `width/2 - 一个单元` 的安全半径验证有解，并显式标注
-  `quality.feasible_under_frozen_A: false`——在 frozen_A 的 0.70 m 安全半径下**不可通行**，
-  这不是 bug 而是要通过性实验测量的边界。
+  供通过性实验使用。它们按 `width/2 - 一个单元` 的安全半径验证有解，并分开记录两个口径：
+  `feasible_at_physical_radius`（门宽 ≥ 2 x 0.58 m）与 `feasible_at_base_d_min`
+  （门宽 ≥ 2 x 0.70 m）。其中 1.2 m 门洞对物理半径够、对基准 d_min 不够——这正是
+  通过性实验要测的边界，不是 bug。
 - **场景内容哈希**：每个场景带 `content_hash`（sha256，不含该字段本身），
   `runner/config.py` 加载时校验；改场景内容必须重算哈希（`env/build_scenarios.py` 自动重算）。
 
@@ -156,17 +179,52 @@ config hash 只覆盖 platform + scenario + algo。换 seed 重跑，hash 不变
   `figures.py` 尚未实现；`frozen_A.yaml` 里的 `dwa` / `comfort` 字段先冻结占位。
 - **HouseExpo 的内墙与门洞在数据里（见「关键约定」的更正），但都是轮廓几何**：
   没有独立的墙/门对象、没有门扇、没有房间多边形（只有房间包围盒）。
-  房间分割、跨门次数、门洞宽度都是我们按固定参数推断的，参数与规则写在
-  `env/scene_quality.py`，换参数会让 `quality` 数值变化（场景内容哈希也会变，需要重跑生成器）。
-- **0.70 m 安全半径把多数户型切成孤岛**：实测 260 个候选里，侵蚀 0.70 m 后仍有
-  ≥8 m 跨房间路径的只有 44 个（跨 ≥3 门的 7 个）。原因是 HouseExpo 门洞多在
-  1.4~1.6 m，正好卡在 2 × 0.70 m 的门槛上；当前 14 个户型场景就是从这 44 个里
-  按 `config/scenario_selection.yaml` 选的。**这是安全半径假设的直接后果**，
-  若后续把 `body_radius` 换成更真实的非圆形模型，需要重跑筛选与固化。
+  房间分割、`room_label_changes`、分界面宽度都是我们按固定参数推断的，参数与规则写在
+  `env/scene_quality.py`，换参数会让 `quality` 数值变化（场景内容哈希也会变，需重跑生成器）。
+  `clearance_*` 与 `bottleneck_width_m` 不受分割影响，建议作为论文主指标。
+- **基准 d_min = 0.70 m 把多数户型切成孤岛**：实测 260 个候选里，按 0.70 m 侵蚀后仍有
+  ≥8 m 跨房间路径的只有 44 个（标签变化 ≥3 的 7 个）。原因是 HouseExpo 门洞多在
+  1.4~1.6 m，卡在 2 × 0.70 m 的门槛上；当前 14 个户型场景就是从这 44 个里选的。
+  解耦后这条限制只作用于**基准档**：`d_min = 0.58 m` 时门槛降到 1.16 m，可用范围更大
+  （见下节扫描）。
+- **求解失败含起终点本身不合规**：`d_min` 升到 0.90/1.10 时，场景的冻结起终点 clearance
+  可能不足，A* 直接返回 `start_violates_clearance`。扫描表里的"可行场景数"就是这个口径
+  （该档位下这个冻结任务能不能用），而不是"地图里是否存在别的可行起终点"。
 - 失败 run 的指标全 0，`success=0` 与 `reason` 是唯一区分；`constraint_violation_rate`
   只在成功 run 上有意义。
 - 未实现 `jerk` / 横向加速度的**硬约束**校验；它们目前只是报告量，等局部层落地。
 - 参考轨迹恒速，jerk 恒为 0：**此阶段不得产出任何平顺性结论**。
+
+## d_min 参数扫描（第 3 章 Pareto 轴）
+
+```bash
+uv run python -m analysis.dmin_sweep     # 4 档 x 14 场景 -> docs/dmin_sweep.csv + 下表
+```
+
+档位配置：`config/configs/dmin_sweep/dmin_{058,070,090,110}.yaml`（只改 `astar.d_min`）。
+表内为可行场景数（分档）与**可行场景上**的中位数（2026-10-25，14 个户型场景）：
+
+| d_min [m] | 可行场景 | 易/中/难 可行 | 路径长中位数 [m] | 能耗中位数 [J] | 最小离障中位数 [m] | clearance<0.9 长度占比中位数 | 瓶颈宽度中位数 [m] |
+|---|---|---|---|---|---|---|---|
+| 0.58 | 14/14 | 4/4, 6/6, 4/4 | 14.45 | 602.4 | 0.582 | 0.637 | 1.60 |
+| 0.70 | 14/14 | 4/4, 6/6, 4/4 | 14.45 | 602.4 | 0.712 | 0.578 | 1.60 |
+| 0.90 | 3/14 | 3/4, 0/6, 0/4 | 6.41 | 243.1 | 0.940 | 0.000 | 3.70 |
+| 1.10 | 2/14 | 2/4, 0/6, 0/4 | 10.02 | 421.7 | 1.726 | 0.000 | 4.18 |
+
+三点解读：
+
+1. **0.58 与 0.70 之间路径长度不变、只有离障变**（14.45 m / 602.4 J 完全相同）：
+   在 8 邻域栅格上贴着约束边界走并不额外付出长度代价，所以把 d_min 从 0.70 放宽到 0.58
+   只是让路径更贴墙（最小离障 0.712 -> 0.582），任务本身没变。这说明"缩短路径"不是
+   调 d_min 的收益，**收益在可行域大小**。
+2. **0.90 是断崖**：所有 medium/hard 场景的必经瓶颈都在 1.46~1.70 m，`2 x 0.90 = 1.80 m`
+   全部过不去，只剩 3 个 easy 场景。这条断崖就是 1.5 m 门洞的直接后果，也是"载人平台
+   安全半径不能随便调大"的定量证据。
+3. 0.90/1.10 行的路径长/能耗中位数只统计幸存场景，与 0.58/0.70 行**不可直接比**。
+
+`d_min = 1.10` 时 hard 场景的预览图（`docs/preview/houseexpo_5427f9b0__dmin_110.png`）
+显示走廊被整体染成策略裕度带、起点即 `start_violates_clearance`——与 0.58 档的
+`__dmin_058.png` 对照，可以直接看到"策略裕度吃掉了整条走廊"。
 
 ## 下一步
 
@@ -175,10 +233,11 @@ config hash 只覆盖 platform + scenario + algo。换 seed 重跑，hash 不变
 ```
 1. env/floorplan.py             HouseExpo -> 占据栅格 + 地形分区        [已完成 2026-10-25]
 2. env/scene_quality.py 等      场景质量：元数据 + 难度分档 + 窄门组     [已完成 2026-10-25]
-3. core/bspline.py              RDP + 曲率约束 B 样条                    <- 当前
-4. core/dwa.py                  绕行判据 + 舒适性代价 + 曲率限速
-5. env/pedestrians.py           ETH/UCY -> 逐帧动态障碍
-6. analysis/                    tables / figures，30 次重复 + Wilcoxon / Fisher
+3. 平台/约束解耦 + d_min 扫描    物理半径与策略裕度分层 + 4 档扫描        [已完成 2026-10-25]
+4. core/bspline.py              RDP + 曲率约束 B 样条                    <- 当前
+5. core/dwa.py                  绕行判据 + 舒适性代价 + 曲率限速
+6. env/pedestrians.py           ETH/UCY -> 逐帧动态障碍
+7. analysis/                    tables / figures，30 次重复 + Wilcoxon / Fisher
 ```
 
 把 ETH/UCY 从第 2 位挪到第 4 位，理由：**行人轨迹是 DWA 的输入**。DWA 还没有

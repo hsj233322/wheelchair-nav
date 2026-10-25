@@ -6,8 +6,10 @@
 2. 轮廓 -> 占据栅格（``--resolution``），约定与 README 一致；
 3. 房间类型 -> 地形材质（``config/terrain_rules.yaml``，**假设，非实测**），
    按确定顺序写成 ``terrain.patches``；
-4. 自由区 = ``clearance >= max(inflation_m, algo.astar.d_min)``，其中
-   ``inflation_m = platform.body_radius + platform.inflation``（不许写死）；
+4. 自由区 = ``clearance >= max(physical_radius, algo.astar.d_min)``：场景层只声明
+   **物理**半径 ``physical_radius = platform.body_radius``（写进 ``map.inflation_m``），
+   策略安全半径由 ``algo.astar.d_min`` 决定（采样与连通性分析按它侵蚀，保证冻结场景
+   在基准档下必有解）；
 5. **按难度档采样起终点**（``config/scenario_selection.yaml`` 指定户型）：
    * easy   ：同一房间内采样，路径 >= ``easy_min_path_len_m``；
    * medium ：跨 1~2 个门洞，路径 >= ``min_path_len_m``；
@@ -19,7 +21,7 @@
 
 另外生成一组**窄门场景**（``narrowdoor_w080/w100/w120``，门洞 0.8/1.0/1.2 m），
 供后续通过性实验使用：它们按门洞宽度对应的较小安全半径验证有解，
-并显式标注 ``quality.feasible_under_frozen_A: false``。
+并分开标注 ``quality.feasible_at_physical_radius`` 与 ``feasible_at_base_d_min``。
 """
 
 from __future__ import annotations
@@ -170,9 +172,13 @@ def load_selection(path: str | Path) -> Selection:
     )
 
 
-def inflation_radius(platform: dict[str, Any]) -> float:
-    """车身安全半径 = platform.body_radius + platform.inflation（不写死）。"""
-    return float(platform["body_radius"]) + float(platform["inflation"])
+def physical_radius(platform: dict[str, Any]) -> float:
+    """场景层只保留**物理**外接圆半径：platform.body_radius（用于地图膨胀与碰撞判定）。
+
+    策略裕度（原 platform.inflation）已移到 algo.astar.d_min，不再写进场景安全半径，
+    这样 d_min 才是自由的实验变量（见 configs/dmin_sweep/）。
+    """
+    return float(platform["body_radius"])
 
 
 def _clip_rect(
@@ -291,15 +297,15 @@ def _candidate_pairs(
     pairs: Sequence[scene_quality.RoomPair], tier: str, *, max_pairs: int = 4
 ) -> list[scene_quality.RoomPair]:
     if tier == scene_quality.MEDIUM:
-        preferred = [pair for pair in pairs if 1 <= pair.crossings <= 2]
+        preferred = [pair for pair in pairs if 1 <= pair.room_label_changes <= 2]
     elif tier == scene_quality.HARD:
-        preferred = [pair for pair in pairs if pair.crossings >= 3]
+        preferred = [pair for pair in pairs if pair.room_label_changes >= 3]
     else:
         preferred = []
     ordered = sorted(
-        preferred, key=lambda pair: (pair.geodesic_m, pair.crossings), reverse=True
+        preferred, key=lambda pair: (pair.geodesic_m, pair.room_label_changes), reverse=True
     )
-    rest = sorted(pairs, key=lambda pair: (pair.geodesic_m, pair.crossings), reverse=True)
+    rest = sorted(pairs, key=lambda pair: (pair.geodesic_m, pair.room_label_changes), reverse=True)
     result: list[scene_quality.RoomPair] = []
     seen: set[tuple[int, int]] = set()
     for pair in ordered + rest:
@@ -333,19 +339,22 @@ def build_one(
     plan = floorplan.load_floorplan(source_path)
     bounds = plan.bbox
     rows, cols, origin = floorplan.grid_shape_for_bounds(bounds, resolution)
-    inflation_m = inflation_radius(platform)
+    inflation_m = physical_radius(platform)
     setup = experiment.planner_setup(platform, algo)
-    if inflation_m > setup.astar_params.d_min + 1e-9:
+    base_d_min = float(setup.astar_params.d_min)
+    if base_d_min + 1e-9 < inflation_m:
         raise config_module.ConfigError(
-            f"inflation = body_radius + inflation = {inflation_m} "
-            f"大于 algo.astar.d_min = {setup.astar_params.d_min}"
+            f"algo.astar.d_min = {base_d_min} 小于物理半径 body_radius = {inflation_m}；"
+            "规划器会给出撞到障碍物的路径"
         )
 
     occupancy = floorplan.rasterize_polygons(
         plan.polygons, resolution, (rows, cols), origin
     )
     clearance = astar.clearance_field(occupancy, resolution)
-    required = max(inflation_m, setup.astar_params.d_min)
+    # 采样与连通性分析都按 base d_min 侵蚀：保证冻结出来的场景在该档下必有解。
+    # 物理半径只写进场景 / 用于窄门组与预览，不参与这里的安全半径。
+    required = max(inflation_m, base_d_min)
     free = clearance + 1e-9 >= required
     if not free.any():
         raise SkipScene(f"侵蚀 {required:.2f} m 后没有自由单元（地图 {rows}x{cols}）")
@@ -451,11 +460,12 @@ def build_one(
                 labels=segmentation.labels,
                 clearance=clearance,
                 free_mask=free,
+                step_length=result.step_length,
                 class_grid=class_grid,
                 default_class=rules.default_class,
             )
             if best is None or result.length_m > best[0]:
-                best = (result.length_m, quality.grade, quality.min_passage_width_m)
+                best = (result.length_m, quality.grade, quality.clearance_min_m)
             if result.length_m + 1e-9 < min_path_len or quality.grade != tier:
                 continue
             quality_dict = quality.to_dict()
@@ -463,8 +473,10 @@ def build_one(
                 {
                     "group": "houseexpo",
                     "tier_declared": tier,
+                    "physical_radius_m": round(inflation_m, 3),
+                    "base_d_min_m": round(base_d_min, 3),
+                    "required_clearance_m": round(required, 3),
                     "core_clearance_m": core_clearance_m,
-                    "required_clearance_m": required,
                     "seed": seed,
                 }
             )
@@ -497,10 +509,14 @@ def build_one(
                 "unreachable_ratio": quality.unreachable_ratio,
                 "default_terrain_ratio": quality.default_terrain_ratio,
                 "path_len_m": quality.path_len_m,
-                "door_crossings": quality.door_crossings,
+                "room_label_changes": quality.room_label_changes,
                 "rooms_visited": quality.rooms_visited,
-                "min_passage_width_m": quality.min_passage_width_m,
-                "min_door_width_m": quality.min_door_width_m,
+                "clearance_min_m": quality.clearance_min_m,
+                "clearance_median_m": quality.clearance_median_m,
+                "clearance_below_090_ratio": quality.clearance_below_090_ratio,
+                "bottleneck_width_m": quality.bottleneck_width_m,
+                "bottleneck_crossings": quality.bottleneck_crossings,
+                "min_interface_width_m": quality.min_interface_width_m,
                 "attempts": attempts,
                 "source": source_path.name,
                 "start": scenario["start"],
@@ -548,11 +564,14 @@ def build_narrow_door(
     """生成一个门洞宽度固定的两房间场景，用于通过性实验。
 
     验证用的安全半径取 ``width_m / 2 - resolution``（车身刚好能过、留一个单元余量），
-    并记录 ``feasible_under_frozen_A = width_m >= 2 * (body_radius + inflation)``。
+    并分别记录两个口径的可行性：
+    ``feasible_at_physical_radius``（门宽 >= 2 x body_radius）与
+    ``feasible_at_base_d_min``（门宽 >= 2 x 基准 d_min，本组按设计为 False）。
     """
-    inflation_m = inflation_radius(platform)
+    inflation_m = physical_radius(platform)
     verified_clearance = max(resolution, width_m / 2.0 - resolution)
     setup = experiment.planner_setup(platform, algo)
+    base_d_min = float(setup.astar_params.d_min)
     narrow_setup = replace(
         setup,
         astar_params=replace(setup.astar_params, d_min=verified_clearance),
@@ -621,6 +640,7 @@ def build_narrow_door(
         labels=segmentation.labels,
         clearance=scene.clearance,
         free_mask=scene.clearance + 1e-9 >= verified_clearance,
+        step_length=result.step_length,
         class_grid=None,
         default_class=rules.default_class,
     )
@@ -632,7 +652,10 @@ def build_narrow_door(
             "narrow_door_width_m": round(width_m, 3),
             "measured_door_width_m": round(measured, 3),
             "verified_clearance_m": round(verified_clearance, 3),
-            "feasible_under_frozen_A": bool(width_m >= 2.0 * inflation_m - 1e-9),
+            "physical_radius_m": round(inflation_m, 3),
+            "base_d_min_m": round(base_d_min, 3),
+            "feasible_at_physical_radius": bool(width_m >= 2.0 * inflation_m - 1e-9),
+            "feasible_at_base_d_min": bool(width_m >= 2.0 * base_d_min - 1e-9),
             "seed": seed,
             "note": "受控门洞宽度，供后续通过性/局部规划实验使用",
         }
@@ -650,10 +673,14 @@ def build_narrow_door(
         "unreachable_ratio": quality.unreachable_ratio,
         "default_terrain_ratio": 0.0,
         "path_len_m": quality.path_len_m,
-        "door_crossings": quality.door_crossings,
+        "room_label_changes": quality.room_label_changes,
         "rooms_visited": quality.rooms_visited,
-        "min_passage_width_m": quality.min_passage_width_m,
-        "min_door_width_m": quality.min_door_width_m,
+        "clearance_min_m": quality.clearance_min_m,
+        "clearance_median_m": quality.clearance_median_m,
+        "clearance_below_090_ratio": quality.clearance_below_090_ratio,
+        "bottleneck_width_m": quality.bottleneck_width_m,
+        "bottleneck_crossings": quality.bottleneck_crossings,
+        "min_interface_width_m": quality.min_interface_width_m,
         "attempts": 1,
         "source": scenario["source"]["file"],
         "start": scenario["start"],
@@ -686,12 +713,16 @@ METADATA_COLUMNS = (
     "tier",
     "grade",
     "path_len_m",
-    "door_crossings",
+    "room_label_changes",
     "rooms_visited",
     "n_components",
     "unreachable_ratio",
-    "min_passage_width_m",
-    "min_door_width_m",
+    "clearance_min_m",
+    "clearance_median_m",
+    "clearance_below_090_ratio",
+    "bottleneck_width_m",
+    "bottleneck_crossings",
+    "min_interface_width_m",
     "default_terrain_ratio",
     "shape_rows",
     "shape_cols",
@@ -821,10 +852,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 written += 1
                 print(
                     f"OK   {info['tier']:<6} {info['id']:<20} {info['shape'][0]:>3}x{info['shape'][1]:<3} "
-                    f"len={info['path_len_m']:>6.2f} m doors={info['door_crossings']} "
-                    f"rooms={info['rooms_visited']} comps={info['n_components']} "
-                    f"unreach={info['unreachable_ratio']:.2f} tries={info['attempts']:>2} "
-                    f"hash={info['content_hash'][:8]} -> {target.name}"
+                    f"len={info['path_len_m']:>6.2f} m label_chg={info['room_label_changes']} "
+                    f"rooms={info['rooms_visited']} c_min={info['clearance_min_m']:.2f} "
+                    f"below0.9={info['clearance_below_090_ratio']:.2f} "
+                    f"bneck={info['bottleneck_width_m']:.2f} comps={info['n_components']} "
+                    f"tries={info['attempts']:>2} hash={info['content_hash'][:8]} -> {target.name}"
                 )
 
     if only is None or "narrow" in only:
@@ -852,7 +884,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"OK   narrow {info['id']:<20} door={width:.1f} m measured="
                 f"{scenario['quality']['measured_door_width_m']:.2f} m "
                 f"verified_clearance={scenario['quality']['verified_clearance_m']:.2f} m "
-                f"frozen_A={scenario['quality']['feasible_under_frozen_A']} "
+                f"physical_ok={scenario['quality']['feasible_at_physical_radius']} "
+                f"base_d_min_ok={scenario['quality']['feasible_at_base_d_min']} "
                 f"hash={info['content_hash'][:8]} -> {target.name}"
             )
 
@@ -861,8 +894,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         f"\ngenerated {written} scenes, skipped {skipped}; "
         f"resolution={args.resolution} m (narrow {args.narrow_resolution} m), "
-        f"seed={args.seed}, inflation={inflation_radius(platform):.2f} m "
-        f"(body_radius={platform['body_radius']} + inflation={platform['inflation']}), "
+        f"seed={args.seed}, physical_radius={physical_radius(platform):.2f} m "
+        f"(platform.body_radius), base_d_min={algo['astar']['d_min']} m (algo), "
         f"metadata -> {args.metadata_out}"
     )
     return 0 if written else 1

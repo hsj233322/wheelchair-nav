@@ -1,5 +1,5 @@
 id: houseexpo_c5a07d7d
-content_hash: f4b3310d6d53f94e8e57deefca65e1d07d5028622336f783c43214115c830d95
+content_hash: 2dc1cdae6f94aafd83a9220a93e41658ae26662646261bc3b1b49f4dc7cbdd06
 source: {dataset: HouseExpo, file: c5a07d7d8b68faa90f92bacd3c860100.json, sha256: 34664c6f0799050e9b91fd0f4538a8e28ae76122ad6b20d5f1bccc390b3e5985, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261130}
 description: HouseExpo c5a07d7d：8 个房间，由外轮廓多边形与房间包围盒转换；地形标签为基于房间类型的假设，非实测数据。
 map:
@@ -470,7 +470,7 @@ map:
     - [14.05, 5.01]
     - [21.19, 5.01]
     - [21.19, 0.1]
-  inflation_m: 0.7
+  inflation_m: 0.58
 start: [15.15, 24.15]
 goal: [7.75, 27.35]
 terrain:
@@ -511,19 +511,28 @@ terrain:
   note: 基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml
 quality:
   path_len_m: 17.477
-  door_crossings: 1
+  room_label_changes: 1
   rooms_visited: 2
   n_components: 6
   unreachable_ratio: 0.6017
   largest_component_ratio: 0.3983
-  min_passage_width_m: 1.423
-  min_door_width_m: 1.7
-  door_widths_m: [1.7]
+  clearance_min_m: 0.712
+  clearance_p10_m: 0.75
+  clearance_median_m: 0.75
+  clearance_below_090_ratio: 0.7575
+  clearance_threshold_m: 0.9
+  bottleneck_width_m: 1.7
+  bottleneck_crossings: 4
+  bottleneck_min_width_m: 1.423
+  interface_widths_m: [1.7]
+  min_interface_width_m: 1.7
   terrain_ratios: {concrete: 0.1269, tile: 0.3771, wood: 0.496}
   default_terrain_ratio: 0.1269
   grade: medium
   group: houseexpo
   tier_declared: medium
-  core_clearance_m: 0.9
+  physical_radius_m: 0.58
+  base_d_min_m: 0.7
   required_clearance_m: 0.7
+  core_clearance_m: 0.9
   seed: 20261130
