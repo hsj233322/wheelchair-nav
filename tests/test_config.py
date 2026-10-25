@@ -174,3 +174,69 @@ def test_astar_effective_params_fill_defaults() -> None:
     defaults = config_module.astar_effective_params(bare, resolved.platform)
     assert defaults["v_cruise"] == resolved.platform["v_max"]
     assert defaults["kappa_window_m"] == 0.6
+
+
+# ---------------------------------------------------------------------------
+# HouseExpo 场景：轮廓多边形、场景内容哈希、膨胀半径
+# ---------------------------------------------------------------------------
+
+HOUSEEXPO_SCENARIO = CONFIG_ROOT / "scenarios" / "houseexpo_a24e5d6b.yaml"
+
+
+def test_polygon_scenario_loads_with_inflation() -> None:
+    resolved = config_module.load_resolved(
+        ALGO, HOUSEEXPO_SCENARIO, config_root=CONFIG_ROOT
+    )
+    assert "polygons" in resolved.scenario["map"]
+    assert "walls" not in resolved.scenario["map"]
+    assert resolved.scenario["map"]["inflation_m"] == 0.7
+    assert resolved.scenario["source"]["dataset"] == "HouseExpo"
+    assert resolved.scenario["content_hash"]
+
+
+def test_tampered_scenario_is_detected_by_content_hash() -> None:
+    doc = config_module.read_config(HOUSEEXPO_SCENARIO)
+    doc["start"] = [doc["start"][0] + 0.5, doc["start"][1]]
+    with pytest.raises(ConfigError, match="content_hash"):
+        config_module.validate_scenario(doc)
+
+
+def test_content_hash_ignores_the_hash_field_itself() -> None:
+    doc = config_module.read_config(HOUSEEXPO_SCENARIO)
+    expected = config_module.compute_scenario_hash(doc)
+    doc["content_hash"] = "whatever"
+    assert config_module.compute_scenario_hash(doc) == expected
+
+
+def test_walls_and_polygons_are_mutually_exclusive() -> None:
+    base = config_module.read_config(CONFIG_ROOT / "scenarios" / "house_01.yaml")
+    base["map"]["polygons"] = [[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]]
+    with pytest.raises(ConfigError, match="walls"):
+        config_module.validate_scenario(base)
+
+    without_walls = config_module.read_config(CONFIG_ROOT / "scenarios" / "house_01.yaml")
+    del without_walls["map"]["walls"]
+    with pytest.raises(ConfigError, match="walls"):
+        config_module.validate_scenario(without_walls)
+
+
+def test_degenerate_polygon_is_rejected() -> None:
+    base = config_module.read_config(HOUSEEXPO_SCENARIO)
+    base["map"]["polygons"] = [[[0.0, 0.0], [1.0, 1.0]]]
+    base["content_hash"] = config_module.compute_scenario_hash(base)
+    with pytest.raises(ConfigError, match="顶点"):
+        config_module.validate_scenario(base)
+
+
+def test_inflation_above_d_min_is_rejected_by_cross_check() -> None:
+    platform = config_module.validate_platform(
+        config_module.read_config(CONFIG_ROOT / "platform.yaml")
+    )
+    algo = config_module.validate_algo(
+        config_module.read_config(CONFIG_ROOT / "configs" / "frozen_A.yaml")
+    )
+    scenario = config_module.read_config(HOUSEEXPO_SCENARIO)
+    scenario["map"]["inflation_m"] = 0.9  # > algo.astar.d_min = 0.7
+    scenario["content_hash"] = config_module.compute_scenario_hash(scenario)
+    with pytest.raises(ConfigError, match="inflation_m"):
+        config_module.validate_cross(platform, scenario, algo)

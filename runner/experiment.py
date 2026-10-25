@@ -27,6 +27,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from core import astar, energy, metrics
+from env import floorplan
 from runner import config as config_module
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -84,7 +85,7 @@ class ExperimentResult:
 
 
 # ---------------------------------------------------------------------------
-# 场景栅格化（过渡实现；接入 HouseExpo 后由 env/floorplan.py 替换）
+# 场景栅格化：矩形墙（手写场景）或户型轮廓多边形（HouseExpo）
 # ---------------------------------------------------------------------------
 
 
@@ -95,15 +96,21 @@ def build_scene(scenario: dict[str, Any]) -> Scene:
     origin = map_doc.get("origin", [0.0, 0.0])
     ox, oy = float(origin[0]), float(origin[1])
 
-    occupancy = np.zeros((rows, cols), dtype=bool)
-    for x0, y0, x1, y1 in map_doc["walls"]:
-        c0 = max(0, int(math.floor((float(x0) - ox) / resolution)))
-        c1 = min(cols, int(math.ceil((float(x1) - ox) / resolution)))
-        r0 = max(0, int(math.floor((float(y0) - oy) / resolution)))
-        r1 = min(rows, int(math.ceil((float(y1) - oy) / resolution)))
-        if c1 > c0 and r1 > r0:
-            # 保守栅格化：与矩形有任何重叠的单元都视为障碍，薄墙不会漏。
-            occupancy[r0:r1, c0:c1] = True
+    if "polygons" in map_doc:
+        # 户型外轮廓：单元中心在多边形内即自由（零厚度轮廓，非有厚度的墙）。
+        occupancy = floorplan.rasterize_polygons(
+            map_doc["polygons"], resolution, (rows, cols), (ox, oy)
+        )
+    else:
+        occupancy = np.zeros((rows, cols), dtype=bool)
+        for x0, y0, x1, y1 in map_doc["walls"]:
+            c0 = max(0, int(math.floor((float(x0) - ox) / resolution)))
+            c1 = min(cols, int(math.ceil((float(x1) - ox) / resolution)))
+            r0 = max(0, int(math.floor((float(y0) - oy) / resolution)))
+            r1 = min(rows, int(math.ceil((float(y1) - oy) / resolution)))
+            if c1 > c0 and r1 > r0:
+                # 保守栅格化：与矩形有任何重叠的单元都视为障碍，薄墙不会漏。
+                occupancy[r0:r1, c0:c1] = True
 
     default_terrain = scenario["terrain"]["default"]
     c_rr = np.full((rows, cols), float(default_terrain["c_rr"]), dtype=float)
@@ -147,6 +154,61 @@ def build_scene(scenario: dict[str, Any]) -> Scene:
         goal_xy=goal_xy,
         start_cell=start_cell,
         goal_cell=goal_cell,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 规划器装配（runner 与 analysis/preview 共用同一条路径）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PlannerSetup:
+    astar_params: astar.AStarParams
+    energy_params: energy.EnergyParams
+    cruise_speed: float
+
+
+def planner_setup(
+    platform: dict[str, Any], algo: dict[str, Any]
+) -> PlannerSetup:
+    """把已校验的 platform / algo 层转成 core 的显式参数对象。"""
+    effective = config_module.astar_effective_params(algo, platform)
+    return PlannerSetup(
+        astar_params=astar.AStarParams(
+            e_budget=float(effective["e_budget"]),
+            d_min=float(effective["d_min"]),
+            kappa_max=float(effective["kappa_max"]),
+            kappa_window_m=float(effective["kappa_window_m"]),
+            max_labels_per_state=int(effective["max_labels_per_state"]),
+            max_expansions=int(effective["max_expansions"]),
+        ),
+        energy_params=energy.EnergyParams(
+            mass=float(platform["mass"]),
+            g=float(platform["g"]),
+            eta=float(platform["eta"]),
+            p_aux=float(platform["p_aux"]),
+            battery_voltage=float(platform["battery_voltage"]),
+            battery_resistance=float(platform["battery_resistance"]),
+        ),
+        cruise_speed=float(effective["v_cruise"]),
+    )
+
+
+def plan_path(scene: Scene, setup: PlannerSetup) -> astar.PathResult:
+    """用约束化 A* 规划一条路径；场景与算法参数都来自已校验的配置。"""
+    return astar.find_path(
+        scene.occupancy,
+        scene.resolution,
+        scene.start_xy,
+        scene.goal_xy,
+        setup.astar_params,
+        energy_params=setup.energy_params,
+        speed=setup.cruise_speed,
+        c_rr=scene.c_rr,
+        slope_rad=scene.slope_rad,
+        origin=scene.origin,
+        clearance=scene.clearance,
     )
 
 
@@ -330,24 +392,7 @@ def run_experiment(
         repeats=repeats,
     )
     scene = build_scene(resolved.scenario)
-    effective = config_module.astar_effective_params(resolved.algo, resolved.platform)
-    cruise_speed = float(effective["v_cruise"])
-    astar_params = astar.AStarParams(
-        e_budget=float(effective["e_budget"]),
-        d_min=float(effective["d_min"]),
-        kappa_max=float(effective["kappa_max"]),
-        kappa_window_m=float(effective["kappa_window_m"]),
-        max_labels_per_state=int(effective["max_labels_per_state"]),
-        max_expansions=int(effective["max_expansions"]),
-    )
-    energy_params = energy.EnergyParams(
-        mass=float(resolved.platform["mass"]),
-        g=float(resolved.platform["g"]),
-        eta=float(resolved.platform["eta"]),
-        p_aux=float(resolved.platform["p_aux"]),
-        battery_voltage=float(resolved.platform["battery_voltage"]),
-        battery_resistance=float(resolved.platform["battery_resistance"]),
-    )
+    setup = planner_setup(resolved.platform, resolved.algo)
 
     base_seed = int(resolved.run["seed"])
     repeat_count = int(resolved.run["repeats"])
@@ -364,27 +409,15 @@ def run_experiment(
     trajectories: list[Trajectory] = []
     for repeat in range(repeat_count):
         repeat_seed = base_seed + repeat
-        result = astar.find_path(
-            scene.occupancy,
-            scene.resolution,
-            scene.start_xy,
-            scene.goal_xy,
-            astar_params,
-            energy_params=energy_params,
-            speed=cruise_speed,
-            c_rr=scene.c_rr,
-            slope_rad=scene.slope_rad,
-            origin=scene.origin,
-            clearance=scene.clearance,
-        )
+        result = plan_path(scene, setup)
         trajectory = build_trajectory(
             result,
             dt=dt_effective,
-            cruise_speed=cruise_speed,
+            cruise_speed=setup.cruise_speed,
             w_max=float(resolved.platform["w_max"]),
             body_radius=float(resolved.platform["body_radius"]),
-            d_min=float(effective["d_min"]),
-            e_budget=float(effective["e_budget"]),
+            d_min=float(setup.astar_params.d_min),
+            e_budget=float(setup.astar_params.e_budget),
         )
         summary = metrics.summarize(
             t=trajectory.t,

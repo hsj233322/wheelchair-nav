@@ -7,3 +7,10 @@ results/
 
 # pytest 临时目录（TMP/TEMP 未设置时会落在项目内）
 pytest-of-*/
+
+# HouseExpo 原始数据（体积大；取样规则与来源见 data/README.md）
+data/houseexpo/
+
+# matplotlib 缓存（用户级缓存目录不可写时使用）
+.matplotlib/
+matplotlib-*/

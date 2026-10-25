@@ -1,0 +1,49 @@
+# 地形标签规则：房间类型 -> 地面材质（假设，非实测）
+#
+# HouseExpo 只提供户型轮廓与房间包围盒，**没有地面材质信息**。这里的映射是
+# **基于房间类型的假设**，用于让"能耗与地形相关"这件事在场景里有区分度，
+# 不是实测数据；论文里必须按假设声明，并配合 c_rr 敏感性分析使用。
+#
+# c_rr（滚动阻力系数）取值参考公开文献对室内地面的常见报道范围
+# （瓷砖/水泥约 0.010~0.020，木地板约 0.02~0.04），此处取区间内的中值设定；
+# 它不来自本课题的实测标定。
+#
+# 绘制顺序（重叠处理）：generic_room_types 里的泛化类别先画，具体类别后画，
+# 因此具体标注赢；同优先级按 (类别名, 文件内出现序号) 排序。该顺序由
+# env/floorplan.py::ordered_room_boxes 实现，保证同一户型两次转换结果一致。
+version: 1
+
+default_class: concrete      # 未标注区域 / 未知房间类型
+
+classes:
+  tile:     {c_rr: 0.015, slope_deg: 0.0}   # 厨房、卫生间：瓷砖
+  wood:     {c_rr: 0.025, slope_deg: 0.0}   # 卧室、客厅、餐厅、书房：木地板
+  concrete: {c_rr: 0.020, slope_deg: 0.0}   # 走廊、门厅、未标注区域：水泥
+
+generic_room_types:      # SUNCG/HouseExpo 的泛化标签，不猜材质
+  - room
+  - indoor
+
+room_type_to_class:
+  kitchen: tile
+  bathroom: tile
+  toilet: tile
+  bedroom: wood
+  guest_room: wood
+  living_room: wood
+  dining_room: wood
+  office: wood
+  hallway: concrete
+  corridor: concrete
+  lobby: concrete
+  entryway: concrete
+  hall: concrete
+  # 以下房间类型在取样户型中出现，但没有明确的地面材质语义，按默认材质处理
+  room: concrete
+  indoor: concrete
+  garage: concrete
+  balcony: concrete
+  loggia: concrete
+  storage: concrete
+
+note: "基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml"

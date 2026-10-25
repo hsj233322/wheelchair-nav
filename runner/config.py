@@ -185,11 +185,30 @@ def validate_platform(doc: Mapping[str, Any]) -> dict[str, Any]:
     return dict(doc)
 
 
-_SCENARIO_KEYS = {"id", "description", "map", "start", "goal", "terrain"}
-_MAP_KEYS = {"resolution", "shape", "origin", "walls"}
-_TERRAIN_KEYS = {"default", "patches"}
+_SCENARIO_KEYS = {
+    "id",
+    "description",
+    "source",
+    "content_hash",
+    "map",
+    "start",
+    "goal",
+    "terrain",
+}
+_MAP_KEYS = {"resolution", "shape", "origin", "walls", "polygons", "inflation_m"}
+_TERRAIN_KEYS = {"default", "patches", "note"}
 _TERRAIN_PATCH_KEYS = {"id", "rect", "c_rr", "slope_deg"}
+_SOURCE_KEYS = {"dataset", "file", "sha256", "url", "version", "license", "note"}
 _MAX_ABS_SLOPE_DEG = 30.0
+
+
+def _check_polygon(value: Any, where: str) -> list[tuple[float, float]]:
+    if not isinstance(value, (list, tuple)) or len(value) < 3:
+        raise ConfigError(f"{where} 必须是至少 3 个 [x, y] 顶点的列表")
+    return [
+        _check_xy(point, f"{where}[{index}]") for index, point in enumerate(value)
+    ]
+
 
 
 def _check_terrain_values(doc: Mapping[str, Any], where: str) -> None:
@@ -210,10 +229,25 @@ def validate_scenario(doc: Mapping[str, Any]) -> dict[str, Any]:
     _check_str(doc["id"], "scenario.id")
     if "description" in doc and not isinstance(doc["description"], str):
         raise ConfigError("scenario.description 必须是字符串")
+    if "source" in doc:
+        source = _require_mapping(doc["source"], "scenario.source")
+        _reject_unknown(source, _SOURCE_KEYS, "scenario.source")
+        for key, value in source.items():
+            if not isinstance(value, str):
+                raise ConfigError(f"scenario.source.{key} 必须是字符串，实际为 {value!r}")
+    if "content_hash" in doc:
+        _check_str(doc["content_hash"], "scenario.content_hash")
+        expected = compute_scenario_hash(doc)
+        if doc["content_hash"] != expected:
+            raise ConfigError(
+                "scenario.content_hash 与场景内容不一致："
+                f"文件为 {doc['content_hash'][:16]}…，实算为 {expected[:16]}…；"
+                "手工改过场景内容就必须重算哈希（env/build_scenarios.py 会重算）"
+            )
 
     map_doc = _require_mapping(doc["map"], "scenario.map")
     _reject_unknown(map_doc, _MAP_KEYS, "scenario.map")
-    _require_keys(map_doc, {"resolution", "shape", "walls"}, "scenario.map")
+    _require_keys(map_doc, {"resolution", "shape"}, "scenario.map")
 
     resolution = _check_number(
         map_doc["resolution"], "scenario.map.resolution", minimum=0.0, minimum_inclusive=False
@@ -229,21 +263,50 @@ def validate_scenario(doc: Mapping[str, Any]) -> dict[str, Any]:
     x_min, y_min = ox, oy
     x_max, y_max = ox + cols * resolution, oy + rows * resolution
 
-    walls = map_doc["walls"]
-    if not isinstance(walls, (list, tuple)):
-        raise ConfigError(f"scenario.map.walls 必须是矩形列表，实际为 {type(walls).__name__}")
-    rects = [_check_rect(rect, f"scenario.map.walls[{i}]") for i, rect in enumerate(walls)]
-    for index, (x0, y0, x1, y1) in enumerate(rects):
-        if (
-            x0 < x_min - 1e-9
-            or y0 < y_min - 1e-9
-            or x1 > x_max + 1e-9
-            or y1 > y_max + 1e-9
-        ):
+    has_walls = "walls" in map_doc
+    has_polygons = "polygons" in map_doc
+    if has_walls == has_polygons:
+        raise ConfigError(
+            "scenario.map 必须且只能给出 walls（轴对齐矩形墙）或 "
+            "polygons（户型外轮廓多边形）之一"
+        )
+
+    if has_walls:
+        walls = map_doc["walls"]
+        if not isinstance(walls, (list, tuple)):
             raise ConfigError(
-                f"scenario.map.walls[{index}] 超出地图范围 "
-                f"[{x_min}, {x_max}] x [{y_min}, {y_max}]"
+                f"scenario.map.walls 必须是矩形列表，实际为 {type(walls).__name__}"
             )
+        rects = [_check_rect(rect, f"scenario.map.walls[{i}]") for i, rect in enumerate(walls)]
+        for index, (x0, y0, x1, y1) in enumerate(rects):
+            if (
+                x0 < x_min - 1e-9
+                or y0 < y_min - 1e-9
+                or x1 > x_max + 1e-9
+                or y1 > y_max + 1e-9
+            ):
+                raise ConfigError(
+                    f"scenario.map.walls[{index}] 超出地图范围 "
+                    f"[{x_min}, {x_max}] x [{y_min}, {y_max}]"
+                )
+    else:
+        polygons = map_doc["polygons"]
+        if not isinstance(polygons, (list, tuple)) or not polygons:
+            raise ConfigError("scenario.map.polygons 必须是非空的多边形列表")
+        for index, polygon in enumerate(polygons):
+            points = _check_polygon(polygon, f"scenario.map.polygons[{index}]")
+            for point_index, (x, y) in enumerate(points):
+                if not (
+                    x_min - 1e-6 <= x <= x_max + 1e-6
+                    and y_min - 1e-6 <= y <= y_max + 1e-6
+                ):
+                    raise ConfigError(
+                        f"scenario.map.polygons[{index}][{point_index}] = {[x, y]} "
+                        f"超出地图范围 [{x_min}, {x_max}] x [{y_min}, {y_max}]"
+                    )
+
+    if "inflation_m" in map_doc:
+        _check_number(map_doc["inflation_m"], "scenario.map.inflation_m", minimum=0.0)
 
     start = _check_xy(doc["start"], "scenario.start")
     goal = _check_xy(doc["goal"], "scenario.goal")
@@ -257,6 +320,8 @@ def validate_scenario(doc: Mapping[str, Any]) -> dict[str, Any]:
     terrain = _require_mapping(doc["terrain"], "scenario.terrain")
     _reject_unknown(terrain, _TERRAIN_KEYS, "scenario.terrain")
     _require_keys(terrain, {"default"}, "scenario.terrain")
+    if "note" in terrain and not isinstance(terrain["note"], str):
+        raise ConfigError("scenario.terrain.note 必须是字符串")
     default_terrain = _require_mapping(terrain["default"], "scenario.terrain.default")
     _reject_unknown(default_terrain, {"c_rr", "slope_deg"}, "scenario.terrain.default")
     _require_keys(default_terrain, {"c_rr", "slope_deg"}, "scenario.terrain.default")
@@ -345,8 +410,10 @@ def validate_run(doc: Mapping[str, Any]) -> dict[str, Any]:
     return dict(doc)
 
 
-def validate_cross(platform: Mapping[str, Any], algo: Mapping[str, Any]) -> None:
-    """跨层一致性：algo 不能突破 platform 的物理上限。"""
+def validate_cross(
+    platform: Mapping[str, Any], scenario: Mapping[str, Any], algo: Mapping[str, Any]
+) -> None:
+    """跨层一致性：场景声明的安全半径与 algo 的约束不能互相矛盾。"""
     astar = algo["astar"]
     d_min = float(astar["d_min"])
     body_radius = float(platform["body_radius"])
@@ -354,6 +421,12 @@ def validate_cross(platform: Mapping[str, Any], algo: Mapping[str, Any]) -> None
         raise ConfigError(
             f"algo.astar.d_min = {d_min} 小于 platform.body_radius = {body_radius}；"
             "这样允许的路径在物理上已经撞到障碍物"
+        )
+    inflation_m = scenario.get("map", {}).get("inflation_m")
+    if inflation_m is not None and float(inflation_m) > d_min + 1e-9:
+        raise ConfigError(
+            f"场景声明的安全半径 scenario.map.inflation_m = {inflation_m} "
+            f"大于 algo.astar.d_min = {d_min}；规划器会给出贴着障碍物的路径"
         )
     v_cruise = float(astar.get("v_cruise", platform["v_max"]))
     if v_cruise > float(platform["v_max"]) + 1e-9:
@@ -439,6 +512,29 @@ def compute_config_hash(
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def compute_scenario_hash(scenario: Mapping[str, Any]) -> str:
+    """场景内容的规范化 JSON 的 sha256（``content_hash`` 字段本身不参与）。
+
+    与 config hash 的区别：config hash 覆盖 platform + scenario + algo，
+    场景哈希只覆盖一份场景文件，用来确认「这个场景没有被手改过」。
+    改场景必须重算哈希（``env/build_scenarios.py`` 会自动重算）。
+    """
+    payload = {key: value for key, value in scenario.items() if key != "content_hash"}
+    blob = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def read_config(path: str | Path) -> dict[str, Any]:
+    """读取一个 YAML 配置（拒绝重复键），不含任何 schema 校验。"""
+    return _read_yaml(Path(path))
+
+
 def astar_effective_params(
     algo: Mapping[str, Any], platform: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -481,7 +577,7 @@ def load_resolved(
     if repeats is not None:
         run["repeats"] = _check_int(repeats, "run.repeats", minimum=1)
 
-    validate_cross(platform, algo)
+    validate_cross(platform, scenario, algo)
     config_hash = compute_config_hash(platform, scenario, algo)
     return ResolvedConfig(
         platform=platform,
