@@ -108,6 +108,7 @@ def test_build_easy_scenario(tmp_path: Path) -> None:
     config_module.validate_scenario(scenario)
     quality = scenario["quality"]
     assert quality["grade"] == scene_quality.EASY
+    assert quality["bottleneck_width_m"] >= scene_quality.BOTTLENECK_EASY_M
     assert quality["room_label_changes"] == 0
     assert quality["rooms_visited"] == 1
     assert quality["path_len_m"] >= 4.0
@@ -119,11 +120,11 @@ def test_build_easy_scenario(tmp_path: Path) -> None:
     assert info["tier"] == scene_quality.EASY
 
 
-def test_build_medium_scenario_crosses_a_door(tmp_path: Path) -> None:
-    scenario, _ = build(tmp_path, DUMBBELL, tier=scene_quality.MEDIUM)
+def test_build_hard_scenario_crosses_a_narrow_door(tmp_path: Path) -> None:
+    scenario, _ = build(tmp_path, DUMBBELL, tier=scene_quality.HARD)
     config_module.validate_scenario(scenario)
     quality = scenario["quality"]
-    assert quality["grade"] == scene_quality.MEDIUM
+    assert quality["grade"] == scene_quality.HARD
     assert quality["room_label_changes"] == 1
     assert quality["rooms_visited"] == 2
     assert quality["path_len_m"] >= 8.0
@@ -133,13 +134,13 @@ def test_build_medium_scenario_crosses_a_door(tmp_path: Path) -> None:
 
 
 def test_declared_tier_is_enforced(tmp_path: Path) -> None:
-    # 该户型最多跨 1 个门，声明 hard 必须跳过而不是硬贴标签
+    # 该户型的必经通道只有 1.5 m（hard 档），声明 medium 必须跳过而不是硬贴标签
     with pytest.raises(build_scenarios.SkipScene):
-        build(tmp_path, DUMBBELL, tier=scene_quality.HARD)
+        build(tmp_path, DUMBBELL, tier=scene_quality.MEDIUM)
 
 
 def test_scenario_is_solvable_and_quality_matches_replay(tmp_path: Path) -> None:
-    scenario, _ = build(tmp_path, DUMBBELL, tier=scene_quality.MEDIUM)
+    scenario, _ = build(tmp_path, DUMBBELL, tier=scene_quality.HARD)
     resolved = config_module.load_resolved(
         "configs/frozen_A.yaml", _write_scenario(tmp_path, scenario), config_root=CONFIG_ROOT
     )
@@ -173,8 +174,8 @@ def test_scenario_is_solvable_and_quality_matches_replay(tmp_path: Path) -> None
 
 
 def test_same_seed_is_byte_identical(tmp_path: Path) -> None:
-    first, _ = build(tmp_path, DUMBBELL, tier=scene_quality.MEDIUM, seed=11)
-    second, _ = build(tmp_path, DUMBBELL, tier=scene_quality.MEDIUM, seed=11)
+    first, _ = build(tmp_path, DUMBBELL, tier=scene_quality.HARD, seed=11)
+    second, _ = build(tmp_path, DUMBBELL, tier=scene_quality.HARD, seed=11)
     # 同一 seed：几何、起终点与质量档案（跨门次数/房间数/难度/门洞宽度）逐字段一致
     assert first["quality"] == second["quality"]
     assert first == second
@@ -187,8 +188,8 @@ def test_same_seed_is_byte_identical(tmp_path: Path) -> None:
 
 
 def test_different_seed_moves_start_and_goal(tmp_path: Path) -> None:
-    first, _ = build(tmp_path, DUMBBELL, tier=scene_quality.MEDIUM, seed=1)
-    second, _ = build(tmp_path, DUMBBELL, tier=scene_quality.MEDIUM, seed=2)
+    first, _ = build(tmp_path, DUMBBELL, tier=scene_quality.HARD, seed=1)
+    second, _ = build(tmp_path, DUMBBELL, tier=scene_quality.HARD, seed=2)
     assert (first["start"], first["goal"]) != (second["start"], second["goal"])
     assert first["map"] == second["map"]
     assert first["terrain"] == second["terrain"]
@@ -323,7 +324,7 @@ def test_cli_writes_scenarios_and_metadata(
         "min_path_len_m: 8.0\n"
         "easy_min_path_len_m: 4.0\n"
         "tiers:\n"
-        "  medium:\n"
+        "  hard:\n"
         "    - dumbbell0001\n",
         encoding="utf-8",
     )
@@ -335,19 +336,19 @@ def test_cli_writes_scenarios_and_metadata(
             "--out-dir", str(out_dir),
             "--selection", str(selection_path),
             "--metadata-out", str(metadata),
-            "--only", "medium",
+            "--only", "hard",
         ]
     )
     assert exit_code == 0
     written = sorted(out_dir.glob("*.yaml"))
     assert len(written) == 1
     scenario = config_module.validate_scenario(config_module.read_config(written[0]))
-    assert scenario["quality"]["grade"] == scene_quality.MEDIUM
+    assert scenario["quality"]["grade"] == scene_quality.HARD
 
     with metadata.open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     assert len(rows) == 1
     assert rows[0]["id"] == scenario["id"]
-    assert rows[0]["grade"] == scene_quality.MEDIUM
-    assert int(rows[0]["room_label_changes"]) == 1
+    assert rows[0]["grade"] == scene_quality.HARD
+    assert float(rows[0]["bottleneck_width_m"]) < scene_quality.BOTTLENECK_HARD_M
     assert "generated 1 scenes" in capsys.readouterr().out

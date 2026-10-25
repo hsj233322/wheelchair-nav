@@ -1,6 +1,6 @@
 id: houseexpo_7381e847
-content_hash: a3e1a3b85f8dc488654491843f270a2c69b1d2407a17f7701da318e10031a8cd
-source: {dataset: HouseExpo, file: 7381e847db9eeffbecc0f3cb6780704c.json, sha256: 4ff934534b1331ce957677d40a4d3626c20f23552970e0da6baf28cb67fecbbe, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261127}
+content_hash: 204183a1470992b8ca5df05189360df97677d2fc0062fb9b763efb4420043e03
+source: {dataset: HouseExpo, file: 7381e847db9eeffbecc0f3cb6780704c.json, sha256: 4ff934534b1331ce957677d40a4d3626c20f23552970e0da6baf28cb67fecbbe, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261231}
 description: HouseExpo 7381e847：10 个房间，由外轮廓多边形与房间包围盒转换；地形标签为基于房间类型的假设，非实测数据。
 map:
   resolution: 0.1
@@ -145,8 +145,8 @@ map:
     - [10.53, 0.11]
     - [10.52, 0.1]
   inflation_m: 0.58
-start: [5.75, 5.05]
-goal: [2.75, 11.25]
+start: [12.15, 3.85]
+goal: [10.95, 12.05]
 terrain:
   default: {c_rr: 0.02, slope_deg: 0.0}
   patches:
@@ -188,29 +188,29 @@ terrain:
     slope_deg: 0.0
   note: 基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml
 quality:
-  path_len_m: 19.633
+  path_len_m: 8.697
   room_label_changes: 1
   rooms_visited: 2
   n_components: 10
   unreachable_ratio: 0.3703
   largest_component_ratio: 0.6297
-  clearance_min_m: 0.712
-  clearance_p10_m: 0.75
-  clearance_median_m: 0.775
-  clearance_below_090_ratio: 0.603
+  clearance_min_m: 0.75
+  clearance_p10_m: 0.846
+  clearance_median_m: 0.955
+  clearance_below_090_ratio: 0.253
   clearance_threshold_m: 0.9
   bottleneck_width_m: 1.5
-  bottleneck_crossings: 4
-  bottleneck_min_width_m: 1.423
+  bottleneck_crossings: 3
+  bottleneck_min_width_m: 1.5
   interface_widths_m: [1.5]
   min_interface_width_m: 1.5
   terrain_ratios: {concrete: 0.6945, wood: 0.3055}
   default_terrain_ratio: 0.6945
-  grade: medium
+  grade: hard
   group: houseexpo
-  tier_declared: medium
+  tier_declared: hard
   physical_radius_m: 0.58
   base_d_min_m: 0.7
   required_clearance_m: 0.7
   core_clearance_m: 0.9
-  seed: 20261127
+  seed: 20261231

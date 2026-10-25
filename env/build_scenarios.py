@@ -293,32 +293,6 @@ def _class_grid(
     )
 
 
-def _candidate_pairs(
-    pairs: Sequence[scene_quality.RoomPair], tier: str, *, max_pairs: int = 4
-) -> list[scene_quality.RoomPair]:
-    if tier == scene_quality.MEDIUM:
-        preferred = [pair for pair in pairs if 1 <= pair.room_label_changes <= 2]
-    elif tier == scene_quality.HARD:
-        preferred = [pair for pair in pairs if pair.room_label_changes >= 3]
-    else:
-        preferred = []
-    ordered = sorted(
-        preferred, key=lambda pair: (pair.geodesic_m, pair.room_label_changes), reverse=True
-    )
-    rest = sorted(pairs, key=lambda pair: (pair.geodesic_m, pair.room_label_changes), reverse=True)
-    result: list[scene_quality.RoomPair] = []
-    seen: set[tuple[int, int]] = set()
-    for pair in ordered + rest:
-        key = (pair.room_a, pair.room_b)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(pair)
-        if len(result) >= max_pairs:
-            break
-    return result
-
-
 def build_one(
     source_path: str | Path,
     *,
@@ -375,40 +349,31 @@ def build_one(
 
     component_labels, _ = ndimage.label(free, structure=_STRUCTURE)
 
-    # groups: (A 区单元, B 区单元, 参考距离[m])；easy 时 A、B 是同一个房间
-    groups: list[tuple[np.ndarray, np.ndarray, float]] = []
-    if tier == scene_quality.EASY:
-        sizes = np.bincount(component_labels.ravel())
-        sizes[0] = 0
-        component = component_labels == int(sizes.argmax())
-        room_ids, counts = np.unique(segmentation.labels[component], return_counts=True)
-        valid = room_ids > 0
-        if not valid.any():
-            raise SkipScene("最大连通分量里没有可识别的房间")
-        room = int(room_ids[valid][int(np.argmax(counts[valid]))])
-        cells = np.argwhere(component & (segmentation.labels == room))
-        if cells.shape[0] < 2:
-            raise SkipScene("最大房间内可行单元不足")
-        span = cells.max(axis=0) - cells.min(axis=0)
-        reference = float(np.hypot(span[0], span[1])) * resolution
-        groups.append((cells, cells, reference))
-        min_path_len = selection.easy_min_path_len_m
-    else:
-        candidate_pairs = _candidate_pairs(pairs, tier)
-        if not candidate_pairs:
-            raise SkipScene(f"没有跨房间的候选房间对（房间数 {segmentation.room_count}）")
-        for pair in candidate_pairs:
-            component_id = int(component_labels[tuple(pair.path_cells[0])])
-            component = component_labels == component_id
-            cells_a = np.argwhere(component & (segmentation.labels == pair.room_a))
-            cells_b = np.argwhere(component & (segmentation.labels == pair.room_b))
-            if cells_a.shape[0] and cells_b.shape[0]:
-                groups.append((cells_a, cells_b, float(pair.geodesic_m)))
-        if not groups:
-            raise SkipScene("候选房间对没有可用单元")
-        min_path_len = selection.min_path_len_m
+    # 采样：难度只看"必经瓶颈宽度"，所以统一走 scene_quality.sample_task_cells
+    # （跨房间对 + 同房间极值对），最终以起终点算出的 bottleneck_width_m 定档。
+    min_path_len = (
+        selection.easy_min_path_len_m
+        if tier == scene_quality.EASY
+        else selection.min_path_len_m
+    )
+    rng = np.random.default_rng(seed)
+    samples = scene_quality.sample_task_cells(
+        clearance,
+        segmentation.labels,
+        free,
+        resolution,
+        tier=tier,
+        rng=rng,
+        min_start_goal_m=min_start_goal_m,
+        max_samples=max_attempts,
+    )
+    if not samples:
+        raise SkipScene(
+            f"该档位没有可用采样（房间数 {segmentation.room_count}，"
+            f"跨房间对 {len(pairs)}）"
+        )
 
-    probe_start = world(groups[0][0][0])
+    probe_start = world(np.asarray(samples[0][0]))
     probe = _scenario_dict(
         plan=plan,
         source_path=source_path,
@@ -428,102 +393,96 @@ def build_one(
     )
     scene = experiment.build_scene(probe)
 
-    rng = np.random.default_rng(seed)
     attempts = 0
     best: tuple[float, str, float] | None = None
-    for cells_a, cells_b, reference in groups:
-        min_distance = min(min_start_goal_m, 0.6 * reference) if reference > 0 else 0.0
-        per_group = max(1, max_attempts // max(1, len(groups)))
-        for _ in range(per_group):
-            if attempts >= max_attempts:
-                break
-            cell_a = cells_a[int(rng.integers(cells_a.shape[0]))]
-            cell_b = cells_b[int(rng.integers(cells_b.shape[0]))]
-            start = world(cell_a)
-            goal = world(cell_b)
-            if math.hypot(goal[0] - start[0], goal[1] - start[1]) < min_distance:
-                continue
-            attempts += 1
-            trial = replace(
-                scene,
-                start_xy=start,
-                goal_xy=goal,
-                start_cell=(int(cell_a[0]), int(cell_a[1])),
-                goal_cell=(int(cell_b[0]), int(cell_b[1])),
-            )
-            result = experiment.plan_path(trial, setup)
-            if not result.success:
-                continue
-            quality = scene_quality.build_quality(
-                path_len_m=result.length_m,
-                cells=result.cells,
-                labels=segmentation.labels,
-                clearance=clearance,
-                free_mask=free,
-                step_length=result.step_length,
-                class_grid=class_grid,
-                default_class=rules.default_class,
-            )
-            if best is None or result.length_m > best[0]:
-                best = (result.length_m, quality.grade, quality.clearance_min_m)
-            if result.length_m + 1e-9 < min_path_len or quality.grade != tier:
-                continue
-            quality_dict = quality.to_dict()
-            quality_dict.update(
-                {
-                    "group": "houseexpo",
-                    "tier_declared": tier,
-                    "physical_radius_m": round(inflation_m, 3),
-                    "base_d_min_m": round(base_d_min, 3),
-                    "required_clearance_m": round(required, 3),
-                    "core_clearance_m": core_clearance_m,
-                    "seed": seed,
-                }
-            )
-            scenario = _scenario_dict(
-                plan=plan,
-                source_path=source_path,
-                resolution=resolution,
-                shape=(rows, cols),
-                origin=origin,
-                patches=patches,
-                inflation_m=inflation_m,
-                default_class=rules.default_class,
-                classes=rules.classes,
-                note=rules.note,
-                start=start,
-                goal=goal,
-                quality=quality_dict,
-                seed=seed,
-                prefix=prefix,
-            )
-            config_module.validate_scenario(scenario)
-            experiment.build_scene(scenario)
-            info = {
-                "id": scenario["id"],
+    for cell_a_tuple, cell_b_tuple in samples:
+        if attempts >= max_attempts:
+            break
+        cell_a = np.asarray(cell_a_tuple)
+        cell_b = np.asarray(cell_b_tuple)
+        start = world(cell_a)
+        goal = world(cell_b)
+        attempts += 1
+        trial = replace(
+            scene,
+            start_xy=start,
+            goal_xy=goal,
+            start_cell=(int(cell_a[0]), int(cell_a[1])),
+            goal_cell=(int(cell_b[0]), int(cell_b[1])),
+        )
+        result = experiment.plan_path(trial, setup)
+        if not result.success:
+            continue
+        quality = scene_quality.build_quality(
+            path_len_m=result.length_m,
+            cells=result.cells,
+            labels=segmentation.labels,
+            clearance=clearance,
+            free_mask=free,
+            step_length=result.step_length,
+            class_grid=class_grid,
+            default_class=rules.default_class,
+        )
+        if best is None or result.length_m > best[0]:
+            best = (result.length_m, quality.grade, quality.clearance_min_m)
+        if result.length_m + 1e-9 < min_path_len or quality.grade != tier:
+            continue
+        quality_dict = quality.to_dict()
+        quality_dict.update(
+            {
                 "group": "houseexpo",
-                "tier": tier,
-                "grade": quality.grade,
-                "shape": [rows, cols],
-                "n_components": quality.n_components,
-                "unreachable_ratio": quality.unreachable_ratio,
-                "default_terrain_ratio": quality.default_terrain_ratio,
-                "path_len_m": quality.path_len_m,
-                "room_label_changes": quality.room_label_changes,
-                "rooms_visited": quality.rooms_visited,
-                "clearance_min_m": quality.clearance_min_m,
-                "clearance_median_m": quality.clearance_median_m,
-                "clearance_below_090_ratio": quality.clearance_below_090_ratio,
-                "bottleneck_width_m": quality.bottleneck_width_m,
-                "bottleneck_crossings": quality.bottleneck_crossings,
-                "min_interface_width_m": quality.min_interface_width_m,
-                "attempts": attempts,
-                "source": source_path.name,
-                "start": scenario["start"],
-                "goal": scenario["goal"],
-                "content_hash": scenario["content_hash"],
+                "tier_declared": tier,
+                "physical_radius_m": round(inflation_m, 3),
+                "base_d_min_m": round(base_d_min, 3),
+                "required_clearance_m": round(required, 3),
+                "core_clearance_m": core_clearance_m,
+                "seed": seed,
             }
-            return scenario, info
+        )
+        scenario = _scenario_dict(
+            plan=plan,
+            source_path=source_path,
+            resolution=resolution,
+            shape=(rows, cols),
+            origin=origin,
+            patches=patches,
+            inflation_m=inflation_m,
+            default_class=rules.default_class,
+            classes=rules.classes,
+            note=rules.note,
+            start=start,
+            goal=goal,
+            quality=quality_dict,
+            seed=seed,
+            prefix=prefix,
+        )
+        config_module.validate_scenario(scenario)
+        experiment.build_scene(scenario)
+        info = {
+            "id": scenario["id"],
+            "group": "houseexpo",
+            "tier": tier,
+            "grade": quality.grade,
+            "shape": [rows, cols],
+            "n_components": quality.n_components,
+            "unreachable_ratio": quality.unreachable_ratio,
+            "default_terrain_ratio": quality.default_terrain_ratio,
+            "path_len_m": quality.path_len_m,
+            "room_label_changes": quality.room_label_changes,
+            "rooms_visited": quality.rooms_visited,
+            "clearance_min_m": quality.clearance_min_m,
+            "clearance_median_m": quality.clearance_median_m,
+            "clearance_below_090_ratio": quality.clearance_below_090_ratio,
+            "bottleneck_width_m": quality.bottleneck_width_m,
+            "bottleneck_crossings": quality.bottleneck_crossings,
+            "min_interface_width_m": quality.min_interface_width_m,
+            "attempts": attempts,
+            "source": source_path.name,
+            "start": scenario["start"],
+            "goal": scenario["goal"],
+            "content_hash": scenario["content_hash"],
+        }
+        return scenario, info
 
     detail = (
         f"最好结果 path={best[0]:.2f} m grade={best[1]}（要求 >= {min_path_len} m 且 {tier}）"

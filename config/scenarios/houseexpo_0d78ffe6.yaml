@@ -1,6 +1,6 @@
 id: houseexpo_0d78ffe6
-content_hash: 30fc160255fc232e3b6b1c0a8467691d5adb5198cfee65120ea60451475baa95
-source: {dataset: HouseExpo, file: 0d78ffe6f03f4fd09a1cec72760ac92c.json, sha256: 340c3dcdf70738d5907df73f061532d2079e8792417b0c49d480eab017028443, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261025}
+content_hash: 2006b11e32b61f5fbf450ccf9c3013f57a90d2e4c65b0a5a70d6fe71659631d4
+source: {dataset: HouseExpo, file: 0d78ffe6f03f4fd09a1cec72760ac92c.json, sha256: 340c3dcdf70738d5907df73f061532d2079e8792417b0c49d480eab017028443, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261026}
 description: HouseExpo 0d78ffe6：3 个房间，由外轮廓多边形与房间包围盒转换；地形标签为基于房间类型的假设，非实测数据。
 map:
   resolution: 0.1
@@ -83,8 +83,8 @@ map:
     - [14.57, 0.11]
     - [14.56, 0.1]
   inflation_m: 0.58
-start: [8.45, 16.25]
-goal: [11.65, 3.95]
+start: [2.25, 15.65]
+goal: [14.25, 19.65]
 terrain:
   default: {c_rr: 0.02, slope_deg: 0.0}
   patches:
@@ -110,20 +110,20 @@ terrain:
     slope_deg: 0.0
   note: 基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml
 quality:
-  path_len_m: 13.625
+  path_len_m: 13.657
   room_label_changes: 0
   rooms_visited: 1
   n_components: 1
   unreachable_ratio: 0.0
   largest_component_ratio: 1.0
-  clearance_min_m: 0.712
-  clearance_p10_m: 0.859
-  clearance_median_m: 3.102
-  clearance_below_090_ratio: 0.1253
+  clearance_min_m: 1.95
+  clearance_p10_m: 2.55
+  clearance_median_m: 3.95
+  clearance_below_090_ratio: 0.0
   clearance_threshold_m: 0.9
-  bottleneck_width_m: 3.698
-  bottleneck_crossings: 1
-  bottleneck_min_width_m: 1.423
+  bottleneck_width_m: 3.9
+  bottleneck_crossings: 0
+  bottleneck_min_width_m: 0.0
   interface_widths_m: []
   min_interface_width_m: 0.0
   terrain_ratios: {concrete: 0.1178, wood: 0.8822}
@@ -135,4 +135,4 @@ quality:
   base_d_min_m: 0.7
   required_clearance_m: 0.7
   core_clearance_m: 0.9
-  seed: 20261025
+  seed: 20261026

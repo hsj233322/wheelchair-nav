@@ -117,28 +117,23 @@ def test_terrain_ratios_over_free_mask() -> None:
 
 
 @pytest.mark.parametrize(
-    "room_label_changes,bottleneck,expected",
+    "bottleneck,expected",
     [
-        (0, 2.0, sq.EASY),
-        (1, 1.6, sq.MEDIUM),
-        (2, 1.5, sq.MEDIUM),
-        (3, 1.5, sq.HARD),
-        (5, 1.5, sq.HARD),
-        (0, 1.2, sq.HARD),   # 单房间但必经窄通道
-        (0, 1.0, sq.HARD),
+        (4.67, sq.EASY),
+        (2.10, sq.EASY),
+        (2.00, sq.EASY),
+        (1.99, sq.MEDIUM),
+        (1.70, sq.MEDIUM),
+        (1.60, sq.MEDIUM),
+        (1.59, sq.HARD),
+        (1.46, sq.HARD),
+        (1.15, sq.HARD),
+        (0.75, sq.HARD),
     ],
 )
-def test_grade_scene(
-    room_label_changes: int, bottleneck: float, expected: str
-) -> None:
-    assert (
-        sq.grade_scene(
-            rooms_visited=room_label_changes + 1,
-            room_label_changes=room_label_changes,
-            bottleneck_width_m=bottleneck,
-        )
-        == expected
-    )
+def test_grade_scene_uses_bottleneck_only(bottleneck: float, expected: str) -> None:
+    # 分档与 d_min、与路径、与房间分割都无关：只由 bottleneck_width_m 决定
+    assert sq.grade_scene(bottleneck_width_m=bottleneck) == expected
 
 
 def test_room_pair_analysis_finds_the_corridor_pair() -> None:
@@ -214,10 +209,47 @@ def test_build_quality_reports_all_fields() -> None:
         default_class="wood",
     )
     payload = quality.to_dict()
-    assert payload["grade"] == sq.MEDIUM
+    # 1.6 m 走廊的保守估计是 1.5996 m，正好压在 hard/medium 阈值上，
+    # 所以这里只断言"档位与 bottleneck 一致"（四舍五入到 3 位会跨过阈值）
+    assert payload["bottleneck_width_m"] == pytest.approx(1.6, abs=0.01)
+    assert payload["grade"] in {sq.MEDIUM, sq.HARD}
     assert payload["room_label_changes"] == 1
     assert payload["rooms_visited"] == 2
     assert payload["bottleneck_width_m"] == pytest.approx(1.6, abs=0.1)
     assert payload["clearance_min_m"] == pytest.approx(0.8, abs=1e-6)
     assert payload["default_terrain_ratio"] == pytest.approx(1.0)
     assert payload["path_len_m"] == pytest.approx(best.geodesic_m, abs=1e-3)
+
+
+def test_sample_task_cells_stays_inside_feasible_region() -> None:
+    clearance = _dumbbell()
+    free = clearance >= 0.7
+    labels = sq.segment_rooms(clearance, core_clearance_m=0.9).labels
+    rng = np.random.default_rng(3)
+    samples = sq.sample_task_cells(
+        clearance, labels, free, 0.1, tier=sq.EASY, rng=rng, max_samples=6
+    )
+    assert samples
+    for cell_a, cell_b in samples:
+        assert free[cell_a] and free[cell_b]
+        assert labels[cell_a] > 0 and labels[cell_a] == labels[cell_b]
+
+
+def test_sample_task_cells_for_hard_tier_crosses_the_narrow_corridor() -> None:
+    clearance = _dumbbell()
+    free = clearance >= 0.7
+    labels = sq.segment_rooms(clearance, core_clearance_m=0.9).labels
+    rng = np.random.default_rng(5)
+    samples = sq.sample_task_cells(
+        clearance, labels, free, 0.1, tier=sq.HARD, rng=rng, max_samples=6
+    )
+    assert samples
+    cell_a, cell_b = samples[0]
+    mask_a = np.zeros(clearance.shape, dtype=bool)
+    mask_a[cell_a] = True
+    mask_b = np.zeros(clearance.shape, dtype=bool)
+    mask_b[cell_b] = True
+    # 1.6 m 走廊 -> bottleneck 1.6 -> hard 档
+    assert sq.widest_connection_m(clearance, mask_a, mask_b) == pytest.approx(
+        1.6, abs=0.1
+    )

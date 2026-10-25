@@ -1,0 +1,84 @@
+id: houseexpo_d398cc42
+content_hash: 6cc0e685232d616bee8d7824161c83cf8df127aa1b33a86671afc5f70a11008b
+source: {dataset: HouseExpo, file: d398cc42034810e0bef66fe9c27e282e.json, sha256: 8c5855016a0975205db6a5d1fb39258ed8fbdeb655eeba16e33d29e6cc16ad05, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261025}
+description: HouseExpo d398cc42：8 个房间，由外轮廓多边形与房间包围盒转换；地形标签为基于房间类型的假设，非实测数据。
+map:
+  resolution: 0.1
+  shape: [220, 182]
+  origin: [0.1, 0.1]
+  polygons:
+  - - [0.11, 0.1]
+    - [0.1, 0.11]
+    - [0.1, 22.09]
+    - [8.63, 22.09]
+    - [8.63, 19.06]
+    - [8.64, 19.05]
+    - [8.74, 19.05]
+    - [8.75, 19.06]
+    - [8.75, 22.09]
+    - [15.7, 22.09]
+    - [15.7, 19.06]
+    - [15.71, 19.05]
+    - [15.8, 19.05]
+    - [15.81, 19.06]
+    - [15.81, 22.09]
+    - [18.28, 22.09]
+    - [18.28, 0.1]
+  inflation_m: 0.58
+start: [12.65, 4.35]
+goal: [3.45, 4.05]
+terrain:
+  default: {c_rr: 0.02, slope_deg: 0.0}
+  patches:
+  - id: tile
+    rect: [8.7, 7.41, 15.12, 9.92]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [8.7, 7.41, 15.12, 9.92]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: wood
+    rect: [9.28, 3.56, 14.48, 7.5]
+    c_rr: 0.025
+    slope_deg: 0.0
+  - id: wood
+    rect: [9.28, 9.83, 14.48, 12.7]
+    c_rr: 0.025
+    slope_deg: 0.0
+  - id: wood
+    rect: [2.11, 8.45, 7.76, 11.96]
+    c_rr: 0.025
+    slope_deg: 0.0
+  - id: concrete
+    rect: [0.1, 0.1, 18.28, 22.09]
+    c_rr: 0.02
+    slope_deg: 0.0
+  note: 基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml
+quality:
+  path_len_m: 9.324
+  room_label_changes: 0
+  rooms_visited: 1
+  n_components: 1
+  unreachable_ratio: 0.0
+  largest_component_ratio: 1.0
+  clearance_min_m: 3.35
+  clearance_p10_m: 4.25
+  clearance_median_m: 4.25
+  clearance_below_090_ratio: 0.0
+  clearance_threshold_m: 0.9
+  bottleneck_width_m: 6.699
+  bottleneck_crossings: 0
+  bottleneck_min_width_m: 0.0
+  interface_widths_m: []
+  min_interface_width_m: 0.0
+  terrain_ratios: {concrete: 1.0}
+  default_terrain_ratio: 1.0
+  grade: easy
+  group: houseexpo
+  tier_declared: easy
+  physical_radius_m: 0.58
+  base_d_min_m: 0.7
+  required_clearance_m: 0.7
+  core_clearance_m: 0.9
+  seed: 20261025

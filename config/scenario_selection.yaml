@@ -1,31 +1,45 @@
 # 场景选取：从 data/houseexpo 的 260 个候选里挑出要固化的户型。
 #
-# 依据 docs/floorplan_screening.csv（由 `python -m env.screen_floorplans` 生成），
-# 该表给出每个户型在 0.70 m 安全半径下的跨房间测地距离、跨门次数与门洞宽度。
-# 选取规则（2026-10-25）：
-#   * medium：最远跨房间测地 >= 8 m 且跨门次数 1~2；
-#   * hard  ：跨门次数 >= 3 且 >= 8 m（HousesExpo 里很少，260 个里只有 5 个）；
-#   * easy  ：路径不跨门（单房间/同区域），但要保证同房间内能做出 >= 4 m 的任务。
-# 选取结果本身是研究决定，记录在此文件；场景内容由 content_hash 冻结。
-version: 1
+# 依据 docs/floorplan_screening.csv（`python -m env.screen_floorplans` 生成）。
+#
+# 难度分档（2026-10-25 第二次修正）**只由 bottleneck_width_m 决定**——起终点之间
+# 最宽瓶颈的宽度，与 A* 走哪条路、与 algo.astar.d_min 都无关，因此同一场景在任何
+# d_min 档位下档位标签一致：
+#
+#   hard   : bottleneck < 1.6 m   （1.40 m 基准要求 + 0.2 m 余量，两格）
+#   medium : 1.6 <= bottleneck < 2.0 m
+#   easy   : bottleneck >= 2.0 m  （余量 >= 0.6 m，通道基本不构成约束）
+#
+# 参考量：2 x body_radius = 1.16 m（物理最小）、2 x base d_min(0.70) = 1.40 m（策略最小）。
+# 采样规则：easy 在同一房间内采样、路径 >= 4 m；medium/hard 在不同房间之间采样、
+# 路径 >= 8 m；全部用 core.astar 在基准 d_min 下验证有解，不达标就跳过。
+# 生成器会把候选按"区域级瓶颈宽度落在目标档"排序后再采样，最终以起终点算出的
+# bottleneck_width_m 为准；因此每个档位多备几个候选，跳过的会打印 SKIP。
+version: 2
 min_path_len_m: 8.0
 easy_min_path_len_m: 4.0
-note: "筛选依据 docs/floorplan_screening.csv；改这里就要重跑 env/build_scenarios.py"
+note: "分档只看 bottleneck_width_m；改这里要重跑 env/build_scenarios.py"
 tiers:
-  hard:
-    - 5427f9b05419c3d5ca5e0706e3d7cf8c   # 7 跨门, 19.9 m, 门洞 1.50 m
-    - ca1d6e237855212112841efb2b837685   # 5 跨门, 17.9 m, 门洞 1.50 m
-    - 384ec5cb362e6b4b6712b0a837167ed1   # 5 跨门,  9.8 m, 门洞 1.50 m
-    - 277f75f153c61b6eec253868f9e1b86d   # 3 跨门, 11.2 m, 门洞 1.51 m
-  medium:
-    - 8bb3c35dcdc851e8a400a301a901845e   # 2 跨门, 17.9 m, 门洞 1.70 m
-    - eef4fbdd950ea6dc4cf6b64523f04b94   # 1 跨门, 12.9 m, 门洞 1.50 m
-    - 7381e847db9eeffbecc0f3cb6780704c   # 1 跨门, 13.2 m, 门洞 1.50 m
-    - fb442a0141683341fd7f4988a8c7117c   # 1 跨门, 12.2 m, 门洞 1.46 m
-    - 0df8d098d48fcb263fb3602e8707a23e   # 2 跨门, 11.2 m, 门洞 1.70 m
-    - c5a07d7d8b68faa90f92bacd3c860100   # 1 跨门, 12.9 m, 门洞 1.70 m
-  easy:
-    - 0d78ffe6f03f4fd09a1cec72760ac92c   # 单一房间, 16.2 x 26.4 m, 侵蚀后不分裂
-    - 07432f2d6c7b19538d8bafe9403574dc   # 单区域, 11.2 x 10.8 m, unreachable 1.3%
-    - 1241c62f34a3534c06d0a069d9aa59d8   # 21.3 x 16.4 m
-    - 12f7c0b017d4989e8908df85ebb2d651   # 11.6 x 9.9 m
+  easy:                     # 开阔大空间：单房间、侵蚀后不分裂
+    - d398cc42034810e0bef66fe9c27e282e   # 1 房间, 33726 格, unreachable 0
+    - 0d78ffe6f03f4fd09a1cec72760ac92c   # 1 房间, 32889 格
+    - b2bcaf5d540faf0a5cb33d0678538340   # 1 房间, 31133 格
+    - 30a183452be6b342a8e9d887d7ac240e   # 1 房间, 26035 格
+    - 64b867945b18ff79c2ab8af397e8df22   # 1 房间, 24919 格
+    - e888f39979e51c8aa3c96452d98312de   # 1 房间, 21246 格
+    - d0aeed69cef4bb46a2cdbf7a7e13d6cc   # 2 房间, 21405 格
+    - 07432f2d6c7b19538d8bafe9403574dc   # 2 房间, 7941 格
+  medium:                   # 跨房间，必经通道 1.6~2.0 m
+    - 8bb3c35dcdc851e8a400a301a901845e   # 门洞 1.70 m
+    - 0df8d098d48fcb263fb3602e8707a23e   # 门洞 1.70 m
+    - c5a07d7d8b68faa90f92bacd3c860100   # 门洞 1.70 m
+    - 1241c62f34a3534c06d0a069d9aa59d8   # 1.90 m
+    - 12f7c0b017d4989e8908df85ebb2d651   # 1.80 m
+  hard:                     # 跨房间，必经通道 < 1.6 m
+    - 5427f9b05419c3d5ca5e0706e3d7cf8c   # 1.50 m，长走廊
+    - ca1d6e237855212112841efb2b837685   # 1.50 m
+    - 384ec5cb362e6b4b6712b0a837167ed1   # 1.50 m
+    - 277f75f153c61b6eec253868f9e1b86d   # 1.50 m
+    - fb442a0141683341fd7f4988a8c7117c   # 1.46 m
+    - eef4fbdd950ea6dc4cf6b64523f04b94   # 1.50 m
+    - 7381e847db9eeffbecc0f3cb6780704c   # 1.50 m

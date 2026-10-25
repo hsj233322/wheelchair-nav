@@ -1,6 +1,6 @@
 id: houseexpo_fb442a01
-content_hash: 370a32e2f35d02223917574a7654afdeb4c5db937a9ae801b986787fcc5eb1ea
-source: {dataset: HouseExpo, file: fb442a0141683341fd7f4988a8c7117c.json, sha256: 3cb05b10c2fa6bf981a9871c1526912c3dab16b066c99f27d6ca834cd2cf3999, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261128}
+content_hash: 3609eebeaddc6d7483a12a1fdf4e1e8bd3cc1562dfc75f7456275343b7c43246
+source: {dataset: HouseExpo, file: fb442a0141683341fd7f4988a8c7117c.json, sha256: 3cb05b10c2fa6bf981a9871c1526912c3dab16b066c99f27d6ca834cd2cf3999, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261229}
 description: HouseExpo fb442a01：11 个房间，由外轮廓多边形与房间包围盒转换；地形标签为基于房间类型的假设，非实测数据。
 map:
   resolution: 0.1
@@ -124,8 +124,8 @@ map:
     - [5.08, 6.76]
     - [5.08, 0.1]
   inflation_m: 0.58
-start: [18.45, 0.85]
-goal: [9.75, 11.75]
+start: [17.35, 1.05]
+goal: [9.75, 8.85]
 terrain:
   default: {c_rr: 0.02, slope_deg: 0.0}
   patches:
@@ -175,16 +175,16 @@ terrain:
     slope_deg: 0.0
   note: 基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml
 quality:
-  path_len_m: 14.504
+  path_len_m: 11.534
   room_label_changes: 1
   rooms_visited: 2
   n_components: 6
   unreachable_ratio: 0.4363
   largest_component_ratio: 0.5637
   clearance_min_m: 0.712
-  clearance_p10_m: 0.756
-  clearance_median_m: 1.394
-  clearance_below_090_ratio: 0.1864
+  clearance_p10_m: 0.75
+  clearance_median_m: 1.05
+  clearance_below_090_ratio: 0.3002
   clearance_threshold_m: 0.9
   bottleneck_width_m: 1.461
   bottleneck_crossings: 3
@@ -193,11 +193,11 @@ quality:
   min_interface_width_m: 1.462
   terrain_ratios: {concrete: 0.8066, tile: 0.1934}
   default_terrain_ratio: 0.8066
-  grade: medium
+  grade: hard
   group: houseexpo
-  tier_declared: medium
+  tier_declared: hard
   physical_radius_m: 0.58
   base_d_min_m: 0.7
   required_clearance_m: 0.7
   core_clearance_m: 0.9
-  seed: 20261128
+  seed: 20261229

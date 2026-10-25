@@ -1,6 +1,6 @@
 id: houseexpo_1241c62f
-content_hash: 92c0ae029e263daf9271ea196f9a29ae245ae8f907f43b68a738944836bb40da
-source: {dataset: HouseExpo, file: 1241c62f34a3534c06d0a069d9aa59d8.json, sha256: 4490de14b94f2283c7062062fa12df1187a418c0faf389f51fcbdec9d5e6b4ab, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261027}
+content_hash: d50c42a2bff675805105b361f171b86a4acf36d973f8e1fdeb0cfd2bccfb1428
+source: {dataset: HouseExpo, file: 1241c62f34a3534c06d0a069d9aa59d8.json, sha256: 4490de14b94f2283c7062062fa12df1187a418c0faf389f51fcbdec9d5e6b4ab, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261128}
 description: HouseExpo 1241c62f：9 个房间，由外轮廓多边形与房间包围盒转换；地形标签为基于房间类型的假设，非实测数据。
 map:
   resolution: 0.1
@@ -102,8 +102,8 @@ map:
     - [5.56, 2.8]
     - [5.56, 0.1]
   inflation_m: 0.58
-start: [13.15, 12.05]
-goal: [18.05, 15.55]
+start: [12.95, 6.95]
+goal: [9.15, 14.75]
 terrain:
   default: {c_rr: 0.02, slope_deg: 0.0}
   patches:
@@ -145,29 +145,29 @@ terrain:
     slope_deg: 0.0
   note: 基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml
 quality:
-  path_len_m: 6.35
+  path_len_m: 9.374
   room_label_changes: 0
   rooms_visited: 1
   n_components: 3
   unreachable_ratio: 0.1631
   largest_component_ratio: 0.8369
-  clearance_min_m: 0.94
-  clearance_p10_m: 0.98
-  clearance_median_m: 1.4
+  clearance_min_m: 0.856
+  clearance_p10_m: 1.466
+  clearance_median_m: 2.335
   clearance_below_090_ratio: 0.0
   clearance_threshold_m: 0.9
-  bottleneck_width_m: 1.899
+  bottleneck_width_m: 1.711
   bottleneck_crossings: 1
-  bottleneck_min_width_m: 1.88
+  bottleneck_min_width_m: 4.143
   interface_widths_m: []
   min_interface_width_m: 0.0
   terrain_ratios: {concrete: 0.452, tile: 0.2049, wood: 0.3431}
   default_terrain_ratio: 0.452
-  grade: easy
+  grade: medium
   group: houseexpo
-  tier_declared: easy
+  tier_declared: medium
   physical_radius_m: 0.58
   base_d_min_m: 0.7
   required_clearance_m: 0.7
   core_clearance_m: 0.9
-  seed: 20261027
+  seed: 20261128

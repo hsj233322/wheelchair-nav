@@ -43,6 +43,14 @@ HARD = "hard"
 
 DEFAULT_CLEARANCE_THRESHOLD_M = 0.9
 DEFAULT_PROMINENCE_M = 0.05
+
+# 难度分档阈值：只看 bottleneck_width_m（起终点之间的最宽瓶颈宽度，与路径、与 d_min 无关）
+#   1.16 m = 2 x platform.body_radius(0.58)  —— 物理最小值
+#   1.40 m = 2 x base d_min(0.70)            —— 基准策略的最小可通行宽度
+#   1.60 m = 1.40 + 0.20（两个栅格）          —— 余量不足 0.2 m 视为"难"
+#   2.00 m                                   —— 余量 >= 0.6 m（约 1.5 x 车身半径）视为"易"
+BOTTLENECK_HARD_M = 1.6
+BOTTLENECK_EASY_M = 2.0
 _STRUCTURE = np.ones((3, 3), dtype=int)
 
 
@@ -449,6 +457,160 @@ def path_metadata(
     return profile
 
 
+def pairs_for_tier(
+    pairs: Sequence[RoomPair],
+    tier: str,
+    clearance: np.ndarray,
+    labels: np.ndarray,
+    *,
+    max_pairs: int = 6,
+) -> list[RoomPair]:
+    """按难度档挑候选房间对。
+
+    难度档只看 ``bottleneck_width_m``，所以先用**区域级**瓶颈宽度（两房间之间的
+    最宽连通宽度）估计该房间对属于哪一档，把同档的排在前面，再按测地距离降序。
+    区域级宽度 >= 单元级宽度，因此这只是排序偏好；最终以起终点算出的
+    ``bottleneck_width_m`` 为准。
+    """
+    by_geodesic = sorted(pairs, key=lambda pair: pair.geodesic_m, reverse=True)
+    scored: list[tuple[bool, float, RoomPair]] = []
+    for pair in by_geodesic[: max_pairs * 3]:
+        width = widest_connection_m(
+            clearance, labels == pair.room_a, labels == pair.room_b
+        )
+        scored.append((grade_scene(bottleneck_width_m=width) == tier, pair.geodesic_m, pair))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    result: list[RoomPair] = []
+    seen: set[tuple[int, int]] = set()
+    for _matched, _geodesic, pair in scored:
+        key = (pair.room_a, pair.room_b)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(pair)
+        if len(result) >= max_pairs:
+            break
+    return result
+
+
+def sample_task_cells(
+    clearance: np.ndarray,
+    labels: np.ndarray,
+    free_mask: np.ndarray,
+    resolution: float,
+    *,
+    tier: str,
+    rng,
+    min_start_goal_m: float = 4.0,
+    max_samples: int = 12,
+    max_pairs: int = 4,
+) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    """在**给定档位的可行域内**采样起终点（两端点在同一连通分量、保持该档结构）。
+
+    用途：d_min 扫描时不能沿用上一档冻结的起终点（那些点在更严的档位下本身就不合法），
+    必须按该档的 ``free_mask = clearance >= d_min`` 重新采样，才能区分
+    "该档不存在可行任务"与"冻结端点在新档不合法"。
+
+    返回候选列表（不跑 A*，由调用方验证）；空列表表示该档不存在该档结构的任务。
+    """
+    clearance = np.asarray(clearance, dtype=float)
+    labels = np.asarray(labels)
+    free_mask = np.asarray(free_mask, dtype=bool)
+    res = float(resolution)
+    if not free_mask.any():
+        return []
+    components, _ = ndimage.label(free_mask, structure=_STRUCTURE)
+    samples: list[tuple[tuple[int, int], tuple[int, int]]] = []
+
+    if tier == EASY:
+        sizes = np.bincount(components.ravel())
+        sizes[0] = 0
+        component = components == int(sizes.argmax())
+        room_ids, counts = np.unique(labels[component], return_counts=True)
+        valid = room_ids > 0
+        if not valid.any():
+            return []
+        room = int(room_ids[valid][int(np.argmax(counts[valid]))])
+        cells = np.argwhere(component & (labels == room))
+        if cells.shape[0] < 2:
+            return []
+        span = cells.max(axis=0) - cells.min(axis=0)
+        min_distance = min(min_start_goal_m, 0.5 * float(np.hypot(*span)) * res)
+        while len(samples) < max_samples:
+            first = int(rng.integers(cells.shape[0]))
+            second = int(rng.integers(cells.shape[0]))
+            if first == second:
+                continue
+            cell_a = cells[first]
+            cell_b = cells[second]
+            if (
+                float(np.hypot(*(cell_b - cell_a))) * res < min_distance
+            ):
+                continue
+            samples.append(
+                ((int(cell_a[0]), int(cell_a[1])), (int(cell_b[0]), int(cell_b[1])))
+            )
+        return samples
+
+    pairs = room_pair_analysis(clearance, labels, free_mask, res)
+    for pair in pairs_for_tier(pairs, tier, clearance, labels, max_pairs=max_pairs):
+        component_id = int(components[tuple(pair.path_cells[0])])
+        component = components == component_id
+        cells_a = np.argwhere(component & (labels == pair.room_a))
+        cells_b = np.argwhere(component & (labels == pair.room_b))
+        if cells_a.shape[0] == 0 or cells_b.shape[0] == 0:
+            continue
+        min_distance = min(min_start_goal_m, 0.6 * pair.geodesic_m)
+        per_pair = max(1, max_samples // max(1, max_pairs))
+        produced = 0
+        guard = 0
+        while produced < per_pair and guard < per_pair * 20:
+            guard += 1
+            cell_a = cells_a[int(rng.integers(cells_a.shape[0]))]
+            cell_b = cells_b[int(rng.integers(cells_b.shape[0]))]
+            if float(np.hypot(*(cell_b - cell_a))) * res < min_distance:
+                continue
+            samples.append(
+                ((int(cell_a[0]), int(cell_a[1])), (int(cell_b[0]), int(cell_b[1])))
+            )
+            produced += 1
+            if len(samples) >= max_samples:
+                return samples
+
+    # 补充"同房间极值对"：难度只看必经瓶颈宽度，同一房间内部的窄颈（例如
+    # L 形房间里 1.8 m 的过道）同样可以是 medium/hard 任务，不能只靠跨房间对覆盖。
+    if samples:
+        return samples
+    sizes = np.bincount(components.ravel())
+    sizes[0] = 0
+    component = components == int(sizes.argmax())
+    room_ids, counts = np.unique(labels[component], return_counts=True)
+    valid = room_ids > 0
+    if not valid.any():
+        return samples
+    room = int(room_ids[valid][int(np.argmax(counts[valid]))])
+    cells = np.argwhere(component & (labels == room))
+    if cells.shape[0] < 2:
+        return samples
+    span = cells.max(axis=0) - cells.min(axis=0)
+    min_distance = min(min_start_goal_m, 0.5 * float(np.hypot(*span)) * res)
+    guard = 0
+    while len(samples) < max_samples and guard < max_samples * 20:
+        guard += 1
+        first = int(rng.integers(cells.shape[0]))
+        second = int(rng.integers(cells.shape[0]))
+        if first == second:
+            continue
+        cell_a = cells[first]
+        cell_b = cells[second]
+        if float(np.hypot(*(cell_b - cell_a))) * res < min_distance:
+            continue
+        samples.append(
+            ((int(cell_a[0]), int(cell_a[1])), (int(cell_b[0]), int(cell_b[1])))
+        )
+    return samples
+
+
 def terrain_ratios(class_grid: np.ndarray, free_mask: np.ndarray) -> dict[str, float]:
     """自由区（通常是侵蚀后的可行区）里各材质类别的占比。"""
     class_grid = np.asarray(class_grid)
@@ -463,22 +625,25 @@ def terrain_ratios(class_grid: np.ndarray, free_mask: np.ndarray) -> dict[str, f
 
 def grade_scene(
     *,
-    rooms_visited: int,
-    room_label_changes: int,
     bottleneck_width_m: float,
-    narrow_passage_width_m: float = 1.2,
-    hard_room_label_changes: int = 3,
+    hard_max_m: float = BOTTLENECK_HARD_M,
+    easy_min_m: float = BOTTLENECK_EASY_M,
 ) -> str:
-    """难度分档：易＝单房间；中＝跨 1~2 个门洞；难＝跨 ≥3 个门洞或必经窄通道。
+    """难度分档：**只依赖 bottleneck_width_m**（起终点之间的最宽瓶颈宽度）。
 
-    "跨门洞"用 ``room_label_changes``（房间标签变化次数）操作化，"必经窄通道"用
-    ``bottleneck_width_m``（最宽瓶颈宽度，分割无关）。两者口径都写在本模块 docstring。
+    该量与 A* 具体走哪条路无关、与 algo.astar.d_min 无关，所以同一个场景在任何
+    d_min 档位下的难度档都一致，场景表不会自相矛盾。
+
+    * ``< hard_max_m``（默认 1.6 m）：最窄必经通道距离基准要求 1.40 m 的余量 < 0.2 m；
+    * ``< easy_min_m``（默认 2.0 m）：中间档；
+    * ``>= easy_min_m``：余量 >= 0.6 m，通道基本不构成约束。
+
+    ``room_label_changes`` / ``bottleneck_crossings`` 只作描述性统计（路径相关），
+    不参与分档。
     """
-    if room_label_changes >= hard_room_label_changes:
+    if bottleneck_width_m < hard_max_m:
         return HARD
-    if bottleneck_width_m <= narrow_passage_width_m:
-        return HARD
-    if room_label_changes >= 1:
+    if bottleneck_width_m < easy_min_m:
         return MEDIUM
     return EASY
 
@@ -542,11 +707,12 @@ def build_quality(
     step_length: np.ndarray | None = None,
     class_grid: np.ndarray | None = None,
     default_class: str = "default",
-    narrow_passage_width_m: float = 1.2,
-    hard_room_label_changes: int = 3,
     clearance_threshold_m: float = DEFAULT_CLEARANCE_THRESHOLD_M,
 ) -> SceneQuality:
-    """把几何量汇总成一个场景的质量档案。"""
+    """把几何量汇总成一个场景的质量档案。
+
+    分档只看 ``bottleneck_width_m``（起终点之间的最宽瓶颈宽度）；其余量是描述性统计。
+    """
     rooms = path_metadata(
         cells,
         labels=labels,
@@ -568,13 +734,7 @@ def build_quality(
         goal_mask[cells[-1, 0], cells[-1, 1]] = True
         bottleneck = widest_connection_m(clearance, start_mask, goal_mask)
 
-    grade = grade_scene(
-        rooms_visited=int(rooms["rooms_visited"]),
-        room_label_changes=int(rooms["room_label_changes"]),
-        bottleneck_width_m=bottleneck,
-        narrow_passage_width_m=narrow_passage_width_m,
-        hard_room_label_changes=hard_room_label_changes,
-    )
+    grade = grade_scene(bottleneck_width_m=bottleneck)
     return SceneQuality(
         path_len_m=float(path_len_m),
         room_label_changes=int(rooms["room_label_changes"]),

@@ -1,6 +1,6 @@
 id: houseexpo_07432f2d
-content_hash: 364295efc1ab6886d8a5c0c2e813cdc288876da6489439231f04d5258c4c8e2d
-source: {dataset: HouseExpo, file: 07432f2d6c7b19538d8bafe9403574dc.json, sha256: 1edef10360754b8a0fa28327bc14798e7a86c059a78ff9b7b413b9d5d8fba60a, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261026}
+content_hash: 2dc2447915e38ab05c941c29fb4822755e8554800d2e0b6bf7acd14c79eb2233
+source: {dataset: HouseExpo, file: 07432f2d6c7b19538d8bafe9403574dc.json, sha256: 1edef10360754b8a0fa28327bc14798e7a86c059a78ff9b7b413b9d5d8fba60a, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261032}
 description: HouseExpo 07432f2d：11 个房间，由外轮廓多边形与房间包围盒转换；地形标签为基于房间类型的假设，非实测数据。
 map:
   resolution: 0.1
@@ -104,8 +104,8 @@ map:
     - [3.05, 0.51]
     - [3.05, 0.1]
   inflation_m: 0.58
-start: [2.85, 4.65]
-goal: [8.35, 6.85]
+start: [2.85, 3.15]
+goal: [10.05, 4.85]
 terrain:
   default: {c_rr: 0.02, slope_deg: 0.0}
   patches:
@@ -159,20 +159,20 @@ terrain:
     slope_deg: 0.0
   note: 基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml
 quality:
-  path_len_m: 6.411
+  path_len_m: 7.904
   room_label_changes: 0
   rooms_visited: 1
   n_components: 2
   unreachable_ratio: 0.013
   largest_component_ratio: 0.987
-  clearance_min_m: 2.335
-  clearance_p10_m: 2.583
-  clearance_median_m: 3.34
+  clearance_min_m: 1.203
+  clearance_p10_m: 1.25
+  clearance_median_m: 2.468
   clearance_below_090_ratio: 0.0
   clearance_threshold_m: 0.9
-  bottleneck_width_m: 4.67
-  bottleneck_crossings: 1
-  bottleneck_min_width_m: 6.548
+  bottleneck_width_m: 2.405
+  bottleneck_crossings: 0
+  bottleneck_min_width_m: 0.0
   interface_widths_m: []
   min_interface_width_m: 0.0
   terrain_ratios: {concrete: 0.1742, tile: 0.2276, wood: 0.5983}
@@ -184,4 +184,4 @@ quality:
   base_d_min_m: 0.7
   required_clearance_m: 0.7
   core_clearance_m: 0.9
-  seed: 20261026
+  seed: 20261032

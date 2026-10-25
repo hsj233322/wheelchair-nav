@@ -42,6 +42,7 @@ from matplotlib import font_manager  # noqa: E402
 from matplotlib.colors import ListedColormap  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
 
+from core import astar  # noqa: E402
 from runner import config as config_module  # noqa: E402
 from runner import experiment  # noqa: E402
 
@@ -93,13 +94,28 @@ def render(
     config_root: str | Path | None = None,
     out_dir: str | Path = DEFAULT_OUT_DIR,
     dpi: int = 150,
+    start_xy: tuple[float, float] | None = None,
+    goal_xy: tuple[float, float] | None = None,
+    tag: str | None = None,
 ) -> Path:
-    """渲染一个场景，返回 PNG 路径。"""
+    """渲染一个场景，返回 PNG 路径。
+
+    ``start_xy`` / ``goal_xy`` 可以覆盖场景里冻结的起终点，用来渲染
+    "按档位重新采样"后的任务（坐标取自 docs/dmin_sweep.csv 的 resampled_* 列）。
+    """
     resolved = config_module.load_resolved(
         algo, scenario_path, platform_path=platform, config_root=config_root
     )
     scenario = resolved.scenario
     scene = experiment.build_scene(scenario)
+    if start_xy is not None and goal_xy is not None:
+        scene = replace(
+            scene,
+            start_xy=(float(start_xy[0]), float(start_xy[1])),
+            goal_xy=(float(goal_xy[0]), float(goal_xy[1])),
+            start_cell=astar.world_to_cell(start_xy, scene.resolution, scene.origin),
+            goal_cell=astar.world_to_cell(goal_xy, scene.resolution, scene.origin),
+        )
     setup = experiment.planner_setup(resolved.platform, resolved.algo)
     quality = scenario.get("quality", {}) or {}
     declared_clearance = quality.get("verified_clearance_m")
@@ -241,12 +257,24 @@ def render(
 
     # 非默认 algo（例如 configs/dmin_sweep/dmin_058.yaml）时给文件名加后缀，
     # 便于同一场景在不同 d_min 档位下并存对比。
-    suffix = "" if str(algo) == DEFAULT_ALGO else f"__{Path(algo).stem}"
+    if tag:
+        suffix = f"__{tag}"
+    else:
+        suffix = "" if str(algo) == DEFAULT_ALGO else f"__{Path(algo).stem}"
     out_path = Path(out_dir) / f"{scenario['id']}{suffix}.png"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(figure)
     return out_path
+
+
+def _parse_xy(text: str | None) -> tuple[float, float] | None:
+    if not text:
+        return None
+    parts = [item.strip() for item in text.split(",")]
+    if len(parts) != 2:
+        raise SystemExit(f"--start/--goal 需要 \"x,y\"，实际为 {text!r}")
+    return float(parts[0]), float(parts[1])
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -260,6 +288,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config-root", default=None)
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     parser.add_argument("--dpi", type=int, default=150)
+    parser.add_argument("--start", default=None, help="覆盖起点 x,y（世界坐标）")
+    parser.add_argument("--goal", default=None, help="覆盖终点 x,y（世界坐标）")
+    parser.add_argument("--tag", default=None, help="输出文件名后缀")
     return parser
 
 
@@ -268,6 +299,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     failed = 0
     for scenario_path in args.scenarios:
         try:
+            start_xy = _parse_xy(args.start)
+            goal_xy = _parse_xy(args.goal)
             out_path = render(
                 scenario_path,
                 algo=args.algo,
@@ -275,6 +308,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config_root=args.config_root,
                 out_dir=args.out_dir,
                 dpi=args.dpi,
+                start_xy=start_xy,
+                goal_xy=goal_xy,
+                tag=args.tag,
             )
         except config_module.ConfigError as exc:
             failed += 1

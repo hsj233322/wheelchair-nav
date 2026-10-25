@@ -82,13 +82,18 @@ def test_all_three_difficulty_tiers_are_represented() -> None:
     assert sum(grades.values()) == len(SCENARIOS)
 
 
-def test_hard_scenarios_have_three_or_more_room_label_changes() -> None:
+def test_grade_is_a_pure_function_of_bottleneck_width() -> None:
+    """分档必须只依赖 bottleneck_width_m：改 d_min、换路径都不该改变档位。"""
     for path in SCENARIOS:
         quality = config_module.read_config(path)["quality"]
+        recomputed = scene_quality.grade_scene(
+            bottleneck_width_m=float(quality["bottleneck_width_m"])
+        )
+        assert quality["grade"] == recomputed
         if quality["grade"] == scene_quality.HARD:
-            assert quality["room_label_changes"] >= 3
-            assert quality["path_len_m"] >= 8.0
-            assert quality["bottleneck_width_m"] > 1.2  # 分割无关的硬指标也要能复算
+            assert quality["bottleneck_width_m"] < scene_quality.BOTTLENECK_HARD_M
+        elif quality["grade"] == scene_quality.EASY:
+            assert quality["bottleneck_width_m"] >= scene_quality.BOTTLENECK_EASY_M
 
 
 def test_scenarios_have_distinct_content_hashes() -> None:

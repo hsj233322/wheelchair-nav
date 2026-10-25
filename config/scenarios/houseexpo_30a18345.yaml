@@ -1,0 +1,124 @@
+id: houseexpo_30a18345
+content_hash: 1013b4512ee5f4e2561bd0bd1068d2c837943c094cbd913b910464f0897f81fc
+source: {dataset: HouseExpo, file: 30a183452be6b342a8e9d887d7ac240e.json, sha256: cb5c362fb49d81c908b32feb5b65a3deb306401cd6b159c0e318851e524ad53e, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261028}
+description: HouseExpo 30a18345：14 个房间，由外轮廓多边形与房间包围盒转换；地形标签为基于房间类型的假设，非实测数据。
+map:
+  resolution: 0.1
+  shape: [142, 220]
+  origin: [0.1, 0.1]
+  polygons:
+  - - [0.11, 0.1]
+    - [0.1, 0.11]
+    - [0.1, 1.13]
+    - [0.11, 1.14]
+    - [0.11, 3.39]
+    - [0.12, 3.4]
+    - [0.12, 4.92]
+    - [0.13, 4.93]
+    - [0.13, 6.88]
+    - [0.14, 6.89]
+    - [0.14, 7.79]
+    - [0.13, 7.8]
+    - [0.13, 8.29]
+    - [0.14, 8.3]
+    - [0.14, 9.27]
+    - [0.15, 9.28]
+    - [0.15, 14.24]
+    - [16.96, 14.24]
+    - [16.97, 14.23]
+    - [22.04, 14.23]
+    - [22.04, 0.12]
+    - [17.04, 0.12]
+    - [17.03, 0.11]
+    - [16.97, 0.11]
+    - [16.96, 0.1]
+  inflation_m: 0.58
+start: [16.05, 7.65]
+goal: [10.65, 2.95]
+terrain:
+  default: {c_rr: 0.02, slope_deg: 0.0}
+  patches:
+  - id: concrete
+    rect: [0.1, 0.1, 10.2, 4.27]
+    c_rr: 0.02
+    slope_deg: 0.0
+  - id: concrete
+    rect: [0.1, 9.49, 0.13, 14.24]
+    c_rr: 0.02
+    slope_deg: 0.0
+  - id: concrete
+    rect: [0.1, 0.1, 2.9, 9.84]
+    c_rr: 0.02
+    slope_deg: 0.0
+  - id: concrete
+    rect: [0.1, 0.1, 17.03, 0.12]
+    c_rr: 0.02
+    slope_deg: 0.0
+  - id: tile
+    rect: [13.52, 1.03, 15.75, 4.28]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [14.21, 5.13, 17.08, 11.11]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [13.52, 1.03, 15.75, 4.28]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [14.21, 5.13, 17.08, 11.11]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: wood
+    rect: [10.11, 1.0, 13.63, 4.28]
+    c_rr: 0.025
+    slope_deg: 0.0
+  - id: wood
+    rect: [9.4, 5.13, 14.33, 10.17]
+    c_rr: 0.025
+    slope_deg: 0.0
+  - id: wood
+    rect: [3.33, 6.11, 9.49, 11.64]
+    c_rr: 0.025
+    slope_deg: 0.0
+  - id: wood
+    rect: [3.32, 1.56, 10.2, 6.84]
+    c_rr: 0.025
+    slope_deg: 0.0
+  - id: tile
+    rect: [3.33, 6.11, 9.49, 11.64]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [16.97, 0.1, 22.04, 14.24]
+    c_rr: 0.015
+    slope_deg: 0.0
+  note: 基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml
+quality:
+  path_len_m: 7.347
+  room_label_changes: 0
+  rooms_visited: 1
+  n_components: 1
+  unreachable_ratio: 0.0
+  largest_component_ratio: 1.0
+  clearance_min_m: 2.85
+  clearance_p10_m: 3.29
+  clearance_median_m: 4.85
+  clearance_below_090_ratio: 0.0
+  clearance_threshold_m: 0.9
+  bottleneck_width_m: 5.697
+  bottleneck_crossings: 0
+  bottleneck_min_width_m: 0.0
+  interface_widths_m: []
+  min_interface_width_m: 0.0
+  terrain_ratios: {concrete: 0.3149, tile: 0.4312, wood: 0.2539}
+  default_terrain_ratio: 0.3149
+  grade: easy
+  group: houseexpo
+  tier_declared: easy
+  physical_radius_m: 0.58
+  base_d_min_m: 0.7
+  required_clearance_m: 0.7
+  core_clearance_m: 0.9
+  seed: 20261028
