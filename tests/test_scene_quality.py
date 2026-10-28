@@ -253,3 +253,33 @@ def test_sample_task_cells_for_hard_tier_crosses_the_narrow_corridor() -> None:
     assert sq.widest_connection_m(clearance, mask_a, mask_b) == pytest.approx(
         1.6, abs=0.1
     )
+
+
+def test_feasible_area_ratio_is_deterministic_and_anchor_based() -> None:
+    # 40x40 的自由区，左侧通过 1.6 m 走廊连到右侧
+    clearance = np.zeros((40, 40), dtype=float)
+    clearance[0:40, 0:16] = 1.0
+    clearance[19:22, 16:24] = 0.8
+    clearance[0:40, 24:40] = 1.0
+
+    # d_min = 0.7：走廊可行 -> 锚点在左侧时，整个自由区都同属一个分量
+    ratio = sq.feasible_area_ratio(clearance, (20, 5), d_min=0.7)
+    assert ratio == pytest.approx(1.0)
+
+    # d_min = 0.9：走廊（0.8）被切断 -> 只剩左侧那一半
+    ratio = sq.feasible_area_ratio(clearance, (20, 5), d_min=0.9)
+    left_area = 40 * 16
+    total_area = 40 * 16 + 3 * 8 + 40 * 16
+    assert ratio == pytest.approx(left_area / total_area)
+
+    # 锚点自身不满足门槛 -> 0（表示"该任务在这一档不可用"）
+    assert sq.feasible_area_ratio(clearance, (20, 19), d_min=0.9) == 0.0
+    # 换锚点到右侧，得到的是右侧分量
+    assert sq.feasible_area_ratio(clearance, (20, 30), d_min=0.9) == pytest.approx(
+        (40 * 16) / total_area
+    )
+
+
+def test_feasible_area_ratio_empty_free_space() -> None:
+    clearance = np.zeros((5, 5), dtype=float)
+    assert sq.feasible_area_ratio(clearance, (2, 2), d_min=0.1) == 0.0

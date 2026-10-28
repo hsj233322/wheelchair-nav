@@ -4,6 +4,8 @@ import csv
 import shutil
 from pathlib import Path
 
+import pytest
+
 from analysis import dmin_sweep
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,8 +83,25 @@ def test_summary_reports_both_modes(tmp_path: Path) -> None:
         assert 0 <= item["frozen_feasible"] <= 1
         assert 0 <= item["resampled_feasible"] <= 1
         assert item["resampled_feasible"] <= item["resample_tier_ok"]
+    for item in summary:
+        assert 0.0 <= item["frozen_area_median"] <= 1.0
+        assert 0.0 <= item["resampled_area_median"] <= 1.0
+        low, high = item["resampled_feasible_ci"]
+        assert low <= item["resampled_feasible"] / item["n_total"] <= high
     table = dmin_sweep.format_table(summary)
     assert "固定:可行" in table and "重采样:成功率" in table
+    assert "可行面积占比" in table
+
+
+def test_wilson_interval_brackets_the_point_estimate() -> None:
+    low, high = dmin_sweep.wilson_interval(12, 20)
+    assert low < 0.6 < high
+    assert low == pytest.approx(0.387, abs=0.005)
+    assert high == pytest.approx(0.781, abs=0.005)
+    # 全成功 / 全失败时区间仍然落在 [0, 1] 内
+    assert dmin_sweep.wilson_interval(20, 20)[1] == pytest.approx(1.0, abs=1e-9)
+    assert dmin_sweep.wilson_interval(0, 20)[0] == pytest.approx(0.0, abs=1e-9)
+    assert dmin_sweep.wilson_interval(0, 0) == (0.0, 0.0)
 
 
 def test_sweep_cli_writes_wide_csv(tmp_path: Path) -> None:
@@ -100,6 +119,10 @@ def test_sweep_cli_writes_wide_csv(tmp_path: Path) -> None:
         rows = list(csv.DictReader(handle))
     assert len(rows) == 2
     assert set(rows[0]) == set(dmin_sweep.CSV_COLUMNS)
+    # 确定性量：与采样预算无关的可行面积占比
+    assert 0.0 <= float(rows[0]["frozen_feasible_area_ratio"]) <= 1.0
+    assert 0.0 <= float(rows[0]["resampled_feasible_area_ratio"]) <= 1.0
+    assert int(rows[0]["sampling_budget"]) == 6
     # 两套列都在：固定起终点 + 按档位重新采样
     assert {"frozen_feasible", "frozen_path_len_m"} <= set(rows[0])
     assert {"resample_tier_ok", "resampled_feasible", "resampled_start"} <= set(rows[0])

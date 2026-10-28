@@ -611,6 +611,42 @@ def sample_task_cells(
     return samples
 
 
+def feasible_area_ratio(
+    clearance: np.ndarray,
+    anchor_cell: Sequence[int],
+    *,
+    d_min: float,
+    free_area_mask: np.ndarray | None = None,
+) -> float:
+    """**确定性**可行面积占比（不依赖采样次数与采样预算）。
+
+    定义：场景自由区中满足 ``clearance >= d_min``、且与 ``anchor_cell``（起终点之一）
+    同属一个连通分量的单元面积占比。单元等面积，所以单元数之比即面积之比。
+
+    * 分母 = 自由区（默认 ``clearance > 0``，即轮廓内的可通行区域）；
+    * 锚点自身不满足门槛时返回 0.0（表示"这个任务在该档不可用"）；
+    * 该量适合写进论文；"可行任务数"仍保留，但要标注采样预算与二项置信区间。
+    """
+    clearance = np.asarray(clearance, dtype=float)
+    free = (
+        clearance > 0.0
+        if free_area_mask is None
+        else np.asarray(free_area_mask, dtype=bool)
+    )
+    total = float(free.sum())
+    if total <= 0:
+        return 0.0
+    row, col = int(anchor_cell[0]), int(anchor_cell[1])
+    feasible = clearance + 1e-9 >= float(d_min)
+    if not feasible[row, col]:
+        return 0.0
+    components, _ = ndimage.label(feasible, structure=_STRUCTURE)
+    component_id = int(components[row, col])
+    if component_id == 0:
+        return 0.0
+    return float((components == component_id).sum()) / total
+
+
 def terrain_ratios(class_grid: np.ndarray, free_mask: np.ndarray) -> dict[str, float]:
     """自由区（通常是侵蚀后的可行区）里各材质类别的占比。"""
     class_grid = np.asarray(class_grid)

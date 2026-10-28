@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import statistics
 import sys
 import zlib
@@ -58,6 +59,7 @@ CSV_COLUMNS = (
     "frozen_clearance_min_m",
     "frozen_below_090_ratio",
     "frozen_bottleneck_width_m",
+    "frozen_feasible_area_ratio",
     # 按档位重新采样
     "resample_tier_ok",
     "resample_attempts",
@@ -70,7 +72,28 @@ CSV_COLUMNS = (
     "resampled_clearance_min_m",
     "resampled_below_090_ratio",
     "resampled_bottleneck_width_m",
+    "resampled_feasible_area_ratio",
+    "sampling_budget",
 )
+
+
+def wilson_interval(
+    successes: int, total: int, *, z: float = 1.959963984540054
+) -> tuple[float, float]:
+    """Wilson 得分区间（默认 95%，z = Phi^-1(0.975)）。
+
+    用于"可行任务数"这类比例量：20 个场景各算一次伯努利试验，
+    区间反映的是"场景是否在该档存在该档任务"这一比例的不确定性。
+    """
+    if total <= 0:
+        return (0.0, 0.0)
+    p = successes / total
+    denominator = 1.0 + z * z / total
+    center = (p + z * z / (2.0 * total)) / denominator
+    half = (
+        z * math.sqrt(p * (1.0 - p) / total + z * z / (4.0 * total * total)) / denominator
+    )
+    return (max(0.0, center - half), min(1.0, center + half))
 
 
 def _sweep_configs(directory: Path) -> list[Path]:
@@ -104,6 +127,7 @@ def _profile(
 
 
 def _frozen_row(resolved, scene, setup, threshold_m: float) -> dict[str, Any]:
+    d_min = float(setup.astar_params.d_min)
     result = experiment.plan_path(scene, setup)
     row: dict[str, Any] = {
         "frozen_feasible": int(result.success),
@@ -113,6 +137,13 @@ def _frozen_row(resolved, scene, setup, threshold_m: float) -> dict[str, Any]:
         "frozen_clearance_min_m": 0.0,
         "frozen_below_090_ratio": 0.0,
         "frozen_bottleneck_width_m": 0.0,
+        # 确定性量：不依赖采样预算
+        "frozen_feasible_area_ratio": round(
+            scene_quality.feasible_area_ratio(
+                scene.clearance, scene.start_cell, d_min=d_min
+            ),
+            4,
+        ),
     }
     if result.success:
         profile = _profile(result, scene, threshold_m)
@@ -172,6 +203,7 @@ def _resampled_row(
         "resampled_clearance_min_m": 0.0,
         "resampled_below_090_ratio": 0.0,
         "resampled_bottleneck_width_m": 0.0,
+        "resampled_feasible_area_ratio": 0.0,
     }
     for cell_a, cell_b in samples:
         row["resample_attempts"] += 1
@@ -205,6 +237,12 @@ def _resampled_row(
                     profile["clearance_below_090_ratio"], 4
                 ),
                 "resampled_bottleneck_width_m": round(width, 3),
+                "resampled_feasible_area_ratio": round(
+                    scene_quality.feasible_area_ratio(
+                        scene.clearance, cell_a, d_min=d_min
+                    ),
+                    4,
+                ),
             }
         )
         break
@@ -239,6 +277,7 @@ def run_sweep(
                 "d_min_m": f"{float(setup.astar_params.d_min):.2f}",
                 "scenario": resolved.scenario["id"],
                 "tier": tier,
+                "sampling_budget": int(max_samples),
             }
             row.update(_frozen_row(resolved, scene, setup, threshold_m))
             row.update(
@@ -272,35 +311,51 @@ def summarize(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
             ]
             return statistics.median(values) if values else 0.0
 
+        total = len(group)
+        tier_ok = sum(int(row["resample_tier_ok"]) for row in group)
+        feasible = sum(int(row["resampled_feasible"]) for row in group)
+        tier_ok_ci = wilson_interval(tier_ok, total)
+        feasible_ci = wilson_interval(feasible, total)
         summary.append(
             {
                 "algo_id": algo_id,
                 "d_min_m": float(group[0]["d_min_m"]),
-                "n_total": len(group),
+                "n_total": total,
+                "sampling_budget": int(group[0].get("sampling_budget", 0)),
                 "frozen_feasible": sum(int(row["frozen_feasible"]) for row in group),
                 "frozen_path_len_median": medians("frozen_", "path_len_m"),
                 "frozen_energy_median": medians("frozen_", "energy_j"),
                 "frozen_clearance_median": medians("frozen_", "clearance_min_m"),
-                "resample_tier_ok": sum(int(row["resample_tier_ok"]) for row in group),
-                "resampled_feasible": sum(
-                    int(row["resampled_feasible"]) for row in group
+                "frozen_area_median": statistics.median(
+                    [float(row["frozen_feasible_area_ratio"]) for row in group]
                 ),
+                "resample_tier_ok": tier_ok,
+                "resample_tier_ok_ci": tier_ok_ci,
+                "resampled_feasible": feasible,
+                "resampled_feasible_ci": feasible_ci,
                 "resampled_path_len_median": medians("resampled_", "path_len_m"),
                 "resampled_energy_median": medians("resampled_", "energy_j"),
                 "resampled_clearance_median": medians("resampled_", "clearance_min_m"),
+                "resampled_area_median": statistics.median(
+                    [float(row["resampled_feasible_area_ratio"]) for row in group]
+                ),
             }
         )
     return summary
 
 
 def format_table(summary: Sequence[dict[str, Any]]) -> str:
-    header = (
-        "| d_min [m] | 固定:可行 | 固定:路径中位 [m] | 固定:能耗中位 [J] | "
-        "固定:离障中位 [m] | 重采样:成功率 | 重采样:可行任务 | 重采样:路径中位 [m] | "
-        "重采样:能耗中位 [J] | 重采样:离障中位 [m] |"
-    )
-    lines = [header, "|---|---|---|---|---|---|---|---|---|---|"]
+    """两张表：任务指标 + 确定性可行面积占比（后者与采样预算无关）。"""
+    lines = [
+        "任务指标（中位数只在可行任务上统计；可行任务数标注 95% Wilson 区间与采样预算）",
+        "",
+        "| d_min [m] | 固定:可行 | 固定:路径中位 [m] | 固定:能耗中位 [J] | 固定:离障中位 [m] | "
+        "重采样:成功率 | 重采样:可行任务 | 重采样:路径中位 [m] | 重采样:能耗中位 [J] | "
+        "重采样:离障中位 [m] |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
     for item in summary:
+        low, high = item["resampled_feasible_ci"]
         lines.append(
             f"| {item['d_min_m']:.2f} | "
             f"{item['frozen_feasible']}/{item['n_total']} | "
@@ -308,10 +363,24 @@ def format_table(summary: Sequence[dict[str, Any]]) -> str:
             f"{item['frozen_energy_median']:.1f} | "
             f"{item['frozen_clearance_median']:.3f} | "
             f"{item['resample_tier_ok']}/{item['n_total']} | "
-            f"{item['resampled_feasible']}/{item['n_total']} | "
+            f"{item['resampled_feasible']}/{item['n_total']} "
+            f"({100.0 * item['resampled_feasible'] / max(1, item['n_total']):.0f}%, "
+            f"CI {100.0 * low:.0f}-{100.0 * high:.0f}%) | "
             f"{item['resampled_path_len_median']:.2f} | "
             f"{item['resampled_energy_median']:.1f} | "
             f"{item['resampled_clearance_median']:.3f} |"
+        )
+    lines += [
+        "",
+        f"确定性可行面积占比（free 自由区中 clearance >= d_min 且与锚点同分量；采样预算 {summary[0]['sampling_budget']} 次/场景）",
+        "",
+        "| d_min [m] | 可行面积占比中位（固定锚点） | 可行面积占比中位（重采样锚点） |",
+        "|---|---|---|",
+    ]
+    for item in summary:
+        lines.append(
+            f"| {item['d_min_m']:.2f} | {item['frozen_area_median']:.3f} | "
+            f"{item['resampled_area_median']:.3f} |"
         )
     return "\n".join(lines)
 
