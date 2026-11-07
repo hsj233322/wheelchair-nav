@@ -12,13 +12,36 @@ astar:
   max_labels_per_state: 64
   max_expansions: 2000000
 
-# 局部规划参数：当前里程碑尚未实现 core/dwa.py，这里先冻结取值占位。
+# B 样条平滑专属参数。注意这里**没有** kappa_max / d_min / e_budget：
+# 那三个约束与 A* 是同一个口径，统一由上面 astar 段供给；
+# 在这里重复声明会被 runner/config.py 直接拒绝（交接文档 7.7 第 2 条）。
+bspline:
+  control_spacing_m: 0.8  # 控制点目标间距 [m]：曲率尺度 ≈ 1/spacing，0.8 m 对应 ≈1.25 1/m
+  rdp_epsilon_m: 0.15     # RDP 垂直距离阈值 [m]：必须大于一格(0.1 m)的栅格阶梯振幅，否则锯齿被保留
+  sample_step_m: 0.02     # 曲率/离障密采样步长 [m]
+  max_insert_depth: 3     # 控制点插入/放稀的递归深度上限，用尽则回退 RDP 折线
+
+# 局部规划（DWA）参数。全部来自 algo 层，core 只接收数值。
 dwa:
-  w_heading: 0.1
-  w_dist: 0.5
-  w_vel: 0.3
-  horizon: 0.6
-  dt: 0.1
+  horizon: 0.6            # 预测时域 [s]
+  dt: 0.1                 # 周期 [s] -> horizon/dt = 6 步
+  v_samples: 9            # 线速度采样数（窗口内）
+  w_samples: 15           # 角速度采样数（窗口内）
+  w_heading: 0.1          # 跟踪：航向偏差权重
+  w_dist: 0.5             # 跟踪：横向偏差 + 过冲权重
+  w_vel: 0.3              # 速度保持权重
+  w_clearance: 0.2        # 离障余量权重
+  jerk_weight: 0.15       # jerk 代价权重（**代价项，不是硬约束**）
+  # 动态绕行判据的**表面间隙**要求（不是圆心距阈值！2026-10-30 修正口径）
+  #   判定: min 圆心距 >= body_radius + r_o + required_gap(δ)
+  #   body_radius = 0.58（platform 层）、r_o = 0.30（手工轨迹）
+  #   同向圆心距阈值 = 0.58 + 0.30 + 0.25 = 1.13 m
+  #   迎面圆心距阈值 = 0.58 + 0.30 + 0.60 = 1.48 m
+  #   两圆不接触门槛（与 δ 无关）= body_radius + r_o = 0.88 m
+  # 早期实现漏掉 body_radius，同向阈值只有 0.55 m < 0.88 m，等于允许两圆重叠 0.33 m。
+  gap_head_on_m: 0.60     # 迎面（δ=0）最小表面间隙 [m]
+  gap_overtake_m: 0.25    # 同向（δ=π）最小表面间隙 [m]
+  lateral_deviation_max_m: 0.6   # 允许偏离参考线上限 [m]（硬约束，越过即放宽为禁止继续恶化）
 
 # 舒适性边界（ISO 2631-1 方向的量），第 4 章局部规划使用。
 comfort:

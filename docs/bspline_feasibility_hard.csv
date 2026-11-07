@@ -1,0 +1,2 @@
+grade,tasks,curvature_satisfied,curvature_infeasible,curvature_infeasible_rate,inserted,insertion_rate,pure_spline_rate,median_length_before_m,median_length_after_m,median_energy_before_j,median_energy_after_j,spline_median_max_kappa,min_clearance_after_m
+hard,7,2,5,0.714,5,0.714,0.286,11.694,11.485,459.3,453.1,0.376,0.657

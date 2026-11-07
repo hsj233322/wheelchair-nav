@@ -1,0 +1,19 @@
+# 第 3 章"硬约束 vs 软惩罚"对照：把 d_min 从硬约束降级为代价项。
+#
+#   enforce_dmin: false
+#   J = 几何长度 + w * Σ max(0, d_min - clearance(单元))
+#
+# d_min 仍取 0.70（策略半径），只是不再"不满足即不可行"。
+# w=0 是本扫描的端点：**完全不做任何安全约束**（只躲障碍单元），用来给出违反率的上界。
+id: ch3_soft_w100
+
+astar:
+  e_budget: 2000.0
+  d_min: 0.70
+  kappa_max: 1.5
+  kappa_window_m: 0.6
+  v_cruise: 1.0
+  max_labels_per_state: 64
+  max_expansions: 2000000
+  enforce_dmin: false
+  soft_penalty_weight: 1.0

@@ -6,6 +6,12 @@
 * ``e_budget``：累计电能预算 [J]；
 * ``kappa_max``：曲率上限 [1/m]。
 
+``d_min`` 可以**按需降级为代价项**（第 3 章"硬约束 vs 软惩罚"对照）：
+``AStarParams(enforce_dmin=False, soft_penalty_weight=w)`` 时不再拒绝贴墙单元，
+而是累加 ``J += w * max(0, d_min - clearance)``。默认 ``enforce_dmin=True``、
+``soft_penalty_weight=0.0``，与本开关引入前**逐字段一致**（基准值测试锁定）。
+注意这只是一个对照开关：论文主张的"约束化"路径永远是 ``enforce_dmin=True``。
+
 曲率在栅格搜索里的处理
 ----------------------
 8 邻域路径的相邻线段转角只能是 45° 的整数倍。直接对 0.2 m 步长套
@@ -65,6 +71,39 @@ class AStarParams:
     max_expansions: int = 2_000_000
     collect_pareto: bool = False
 
+    enforce_dmin: bool = True
+    """``d_min`` 是否作**硬约束**（默认 ``True``，即本框架的既有行为）。
+
+    第 3 章的"硬约束 vs 软惩罚"对照开关：
+
+    * ``True``（默认）：``clearance < d_min`` 的单元**直接不可扩展**，
+      路径上不可能出现违反 —— 这是"约束化 A*"的定义；
+    * ``False``：取消该硬约束（只保留障碍单元不可通行），改成
+      :attr:`soft_penalty_weight` 指定的**代价项**，规划器可以为了缩短行程
+      而主动贴墙 —— 违反率因此**大于 0**，且随权重增大而下降。
+
+    **默认值不改变任何既有行为**：``enforce_dmin=True`` 且
+    ``soft_penalty_weight=0`` 时，搜索的排序键、支配判据、返回路径与加入本字段前
+    逐字段一致（由 ``tests/test_astar.py`` 的基准值测试锁定）。
+    """
+
+    soft_penalty_weight: float = 0.0
+    """软惩罚权重 ``w``（仅 ``enforce_dmin=False`` 时生效）。
+
+    代价项（对每次**进入**的单元累加，含对角步）：
+
+        J += w * max(0, d_min - clearance(unit))
+
+    累计代价 ``J = 几何长度 + Σ 惩罚``，搜索按 ``J`` 排序与支配。
+    返回的 ``PathResult.length_m`` 仍是**几何长度**（惩罚单独记在
+    ``PathResult.soft_penalty``），因此两个口径不会混在一起。
+
+    注意口径：惩罚按**单元**计，不按步长加权（``w`` 无量纲、与长度同量纲累加）。
+    这样做是为了让"违反一处"与"违反一米"的边际代价相同；若改成按步长加权，
+    对角步（0.141 m）会比正交步（0.1 m）多付 41% 惩罚，反而惩罚了更长的可行步。
+    ``enforce_dmin=True`` 时本字段恒不生效（硬约束已保证 ``clearance >= d_min``）。
+    """
+
     def __post_init__(self) -> None:
         if self.e_budget < 0:
             raise ValueError(f"e_budget 必须 >= 0，实际为 {self.e_budget}")
@@ -78,6 +117,10 @@ class AStarParams:
             raise ValueError("max_labels_per_state 必须 >= 1")
         if self.max_expansions < 1:
             raise ValueError("max_expansions 必须 >= 1")
+        if not self.soft_penalty_weight >= 0:
+            raise ValueError(
+                f"soft_penalty_weight 必须 >= 0，实际为 {self.soft_penalty_weight}"
+            )
 
 
 @dataclass(frozen=True)
@@ -99,6 +142,12 @@ class PathResult:
     labels_created: int
     pareto_length_m: np.ndarray
     pareto_energy_j: np.ndarray
+    soft_penalty: float = 0.0
+    """软惩罚累计值 ``Σ w·max(0, d_min − clearance)``（``enforce_dmin=True`` 时恒为 0）。
+
+    它是搜索真实最小化的量的一部分：``J = length_m + soft_penalty``。
+    ``length_m`` 始终是几何长度，两者分开报，避免"代价"与"几何"混为一谈。
+    """
 
 
 @dataclass(slots=True)
@@ -109,7 +158,17 @@ class _Label:
     heading: int
     length: float
     energy_j: float
+    penalty: float = 0.0
     active: bool = field(default=True)
+
+    @property
+    def cost(self) -> float:
+        """搜索排序与支配用的累计代价 ``J = 几何长度 + 软惩罚``。
+
+        ``penalty == 0``（默认硬约束模式）时 ``cost`` 与 ``length`` **完全相同**，
+        因此加入软惩罚不影响任何既有行为。
+        """
+        return self.length + self.penalty
 
 
 # ---------------------------------------------------------------------------
@@ -191,11 +250,16 @@ def _empty_result(reason: str, *, expanded: int = 0, labels_created: int = 0) ->
 
 
 def _dominated(
-    labels: list[_Label], bucket: list[int], length: float, energy_j: float
+    labels: list[_Label], bucket: list[int], cost: float, energy_j: float
 ) -> bool:
+    """``bucket`` 里是否已有标签在 (代价, 能耗) 两个维度上都不差。
+
+    ``cost`` 是 ``几何长度 + 软惩罚``：硬约束模式（默认）下软惩罚恒为 0，
+    于是本函数与"按长度支配"完全等价。
+    """
     for index in bucket:
         other = labels[index]
-        if other.length <= length + EPS and other.energy_j <= energy_j + EPS:
+        if other.cost <= cost + EPS and other.energy_j <= energy_j + EPS:
             return True
     return False
 
@@ -261,12 +325,18 @@ def find_path(
     start_row, start_col = world_to_cell(start_xy, res, origin)
     goal_row, goal_col = world_to_cell(goal_xy, res, origin)
 
+    # 第 3 章"硬约束 vs 软惩罚"开关：``enforce_dmin=False`` 时取消离障硬约束，
+    # 改用累加代价项。``soft_weight`` 在默认模式下**恒为 0.0**，
+    # 保证默认行为与加入本开关之前逐字段一致。
+    hard_clearance = bool(params.enforce_dmin)
+    soft_weight = 0.0 if hard_clearance else float(params.soft_penalty_weight)
+
     for name, row, col in (("start", start_row, start_col), ("goal", goal_row, goal_col)):
         if not (0 <= row < rows and 0 <= col < cols):
             return _empty_result(f"{name}_out_of_bounds")
         if occ[row, col]:
             return _empty_result(f"{name}_blocked")
-        if clear[row, col] + EPS < params.d_min:
+        if hard_clearance and clear[row, col] + EPS < params.d_min:
             return _empty_result(f"{name}_violates_clearance")
 
     if (start_row, start_col) == (goal_row, goal_col):
@@ -321,7 +391,7 @@ def find_path(
             break
 
         if label.row == goal_row and label.col == goal_col:
-            if best_index is None or label.length < labels[best_index].length - EPS:
+            if best_index is None or label.cost < labels[best_index].cost - EPS:
                 best_index = index
             if not params.collect_pareto:
                 break
@@ -344,7 +414,7 @@ def find_path(
             ):
                 # 禁止贴着障碍角斜穿
                 continue
-            if clear[next_row, next_col] + EPS < params.d_min:
+            if hard_clearance and clear[next_row, next_col] + EPS < params.d_min:
                 continue
 
             distance = res * (math.sqrt(2.0) if diagonal else 1.0)
@@ -361,10 +431,17 @@ def find_path(
             new_energy = label.energy_j + step_energy
             if new_energy > params.e_budget + EPS:
                 continue
+            # 软惩罚（仅 enforce_dmin=False 时非零）：按**进入的单元**累加。
+            # 默认模式下 soft_weight == 0.0，new_penalty 恒等于 label.penalty(=0.0)，
+            # 因此 cost == length 且全部下游比较与改动前逐位一致。
+            new_penalty = label.penalty + soft_weight * max(
+                0.0, params.d_min - clear[next_row, next_col]
+            )
+            new_cost = new_length + new_penalty
 
             key = (next_row, next_col, direction)
             bucket = state_labels.get(key)
-            if bucket is not None and _dominated(labels, bucket, new_length, new_energy):
+            if bucket is not None and _dominated(labels, bucket, new_cost, new_energy):
                 continue
             if bucket is None:
                 bucket = []
@@ -372,10 +449,10 @@ def find_path(
 
             if len(bucket) >= params.max_labels_per_state:
                 worst = max(
-                    bucket, key=lambda i: (labels[i].length, labels[i].energy_j)
+                    bucket, key=lambda i: (labels[i].cost, labels[i].energy_j)
                 )
-                if (labels[worst].length, labels[worst].energy_j) <= (
-                    new_length,
+                if (labels[worst].cost, labels[worst].energy_j) <= (
+                    new_cost,
                     new_energy,
                 ):
                     continue
@@ -386,7 +463,7 @@ def find_path(
             for other_index in bucket:
                 other = labels[other_index]
                 if (
-                    other.length >= new_length - EPS
+                    other.cost >= new_cost - EPS
                     and other.energy_j >= new_energy - EPS
                 ):
                     other.active = False
@@ -403,12 +480,13 @@ def find_path(
                     heading=direction,
                     length=new_length,
                     energy_j=new_energy,
+                    penalty=new_penalty,
                 )
             )
             bucket.append(new_index)
             heapq.heappush(
                 queue,
-                (new_length + float(heuristic[next_row, next_col]), counter, new_index),
+                (new_cost + float(heuristic[next_row, next_col]), counter, new_index),
             )
             counter += 1
             if next_row == goal_row and next_col == goal_col:
@@ -418,7 +496,7 @@ def find_path(
         active_goals = [i for i in goal_indices if labels[i].active]
         if active_goals:
             best_index = min(
-                active_goals, key=lambda i: (labels[i].length, labels[i].energy_j)
+                active_goals, key=lambda i: (labels[i].cost, labels[i].energy_j)
             )
 
     if best_index is None:
@@ -484,4 +562,5 @@ def find_path(
         labels_created=len(labels),
         pareto_length_m=pareto_length,
         pareto_energy_j=pareto_energy,
+        soft_penalty=float(labels[best_index].penalty),
     )

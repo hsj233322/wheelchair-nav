@@ -1,0 +1,17 @@
+# 第 3 章基线 1：传统 A*（仅长度）
+#
+# 与本文配置的**唯一**差别：
+#   * d_min = 0.58 = platform.body_radius（物理外接圆），**不含** 0.12 m 策略裕度；
+# 搜索键就是几何长度（core/astar.py 的定义），因此本行即"只优化行程"的经典 A*。
+# 它仍然拒绝障碍单元，所以产出的路径**物理可行驶**，但可能贴着 0.58 m 边界，
+# 不满足本文的策略安全半径 0.70 m —— 这正是表里"约束不可行任务数"的来源。
+id: ch3_baseline_length
+
+astar:
+  e_budget: 2000.0
+  d_min: 0.58             # 物理外接圆半径（= 文献做法的膨胀半径）
+  kappa_max: 1.5
+  kappa_window_m: 0.6
+  v_cruise: 1.0
+  max_labels_per_state: 64
+  max_expansions: 2000000

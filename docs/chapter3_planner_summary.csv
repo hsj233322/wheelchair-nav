@@ -1,0 +1,4 @@
+planner,planner_label,algo_config,config_hash_ref_scenario,tasks,success,length_median_m,length_total_m,energy_median_j,energy_total_j,time_median_s,min_clearance_min_m,min_clearance_median_m,violation_rate_length_weighted,violation_tasks,physical_violation_tasks,feasible_tasks,feasible_rate,pareto_size_median
+length,传统 A*（仅长度）,configs/chapter3/baseline_length_a.yaml,91dfc64d399a7f2ef44eb3d2dd8a996c651a9efdfc3d9f3624f65e961cd7083d,20,20,10.9663,234.9102,470.206,10714.487,10.966,0.5825,0.6500,0.2684,11,0,9,0.4500,1
+esa,能耗加权 A*（ESA*）,configs/chapter3/baseline_esa_a.yaml,adb41252d73ac52d87d14cb81e9e9ce50f04be13a30b0265ab81b5955d2adcd4,20,20,10.9663,236.2415,468.772,10597.977,10.966,0.5825,0.6202,0.2673,11,0,9,0.4500,1
+constrained,本文约束化 A*,configs/frozen_A.yaml,09381b15323690a47acb03a9cd925bd1a670119f0dade38c198583cd5ea134b6,20,20,11.0861,236.2616,472.108,10827.594,11.086,0.7116,0.7213,0.0000,0,0,20,1.0000,1

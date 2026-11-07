@@ -1,0 +1,17 @@
+group,obstacle_kind,tasks,executed_tasks,bottleneck_min_m,bottleneck_median_m,meeting_width_required_m,tasks_geometrically_impossible,contact_frames,moving_frames,stopped_frames,narrow_frames,wide_frames,moving_narrow,moving_wide,stopped_narrow,stopped_wide,stopped_narrow_share,tasks_with_active_collision,tasks_with_passive_contact,tasks_with_avoidable_contact,contact_v_le_001,contact_v_001_010,contact_v_010_030,contact_v_gt_030
+easy,all,24,24,2.405,5.498,1.760,0,223,0,223,0,223,0,0,0,223,0.0000,0,9,9,223,0,0,0
+easy,head_on,8,8,2.405,5.498,1.760,0,161,0,161,0,161,0,0,0,161,0.0000,0,6,6,161,0,0,0
+easy,crossing,8,8,2.405,5.498,1.760,0,62,0,62,0,62,0,0,0,62,0.0000,0,3,3,62,0,0,0
+easy,same_direction,8,8,2.405,5.498,1.760,0,0,0,0,0,0,0,0,0,0,0.0000,0,0,0,0,0,0,0
+medium,all,6,6,1.700,1.706,1.760,6,11,0,11,11,0,0,0,11,0,1.0000,0,1,0,11,0,0,0
+medium,head_on,2,2,1.700,1.706,1.760,2,0,0,0,0,0,0,0,0,0,0.0000,0,0,0,0,0,0,0
+medium,crossing,2,2,1.700,1.706,1.760,2,11,0,11,11,0,0,0,11,0,1.0000,0,1,0,11,0,0,0
+medium,same_direction,2,2,1.700,1.706,1.760,2,0,0,0,0,0,0,0,0,0,0.0000,0,0,0,0,0,0,0
+hard,all,6,6,1.500,1.500,1.760,6,50,0,50,50,0,0,0,50,0,1.0000,0,2,0,50,0,0,0
+hard,head_on,2,2,1.500,1.500,1.760,2,50,0,50,50,0,0,0,50,0,1.0000,0,2,0,50,0,0,0
+hard,crossing,2,2,1.500,1.500,1.760,2,0,0,0,0,0,0,0,0,0,0.0000,0,0,0,0,0,0,0
+hard,same_direction,2,2,1.500,1.500,1.760,2,0,0,0,0,0,0,0,0,0,0.0000,0,0,0,0,0,0,0
+all,all,36,36,1.500,3.400,1.760,12,284,0,284,61,223,0,0,61,223,0.2148,0,12,9,284,0,0,0
+all,head_on,12,12,1.500,3.400,1.760,4,211,0,211,50,161,0,0,50,161,0.2370,0,8,6,211,0,0,0
+all,crossing,12,12,1.500,3.400,1.760,4,73,0,73,11,62,0,0,11,62,0.1507,0,4,3,73,0,0,0
+all,same_direction,12,12,1.500,3.400,1.760,4,0,0,0,0,0,0,0,0,0,0.0000,0,0,0,0,0,0,0

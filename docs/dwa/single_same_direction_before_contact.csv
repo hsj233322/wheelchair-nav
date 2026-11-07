@@ -1,0 +1,5 @@
+group,obstacle_kind,tasks,executed_tasks,bottleneck_min_m,bottleneck_median_m,meeting_width_required_m,tasks_geometrically_impossible,contact_frames,moving_frames,stopped_frames,narrow_frames,wide_frames,moving_narrow,moving_wide,stopped_narrow,stopped_wide,stopped_narrow_share,tasks_with_active_collision,tasks_with_passive_contact,tasks_with_avoidable_contact,contact_v_le_001,contact_v_001_010,contact_v_010_030,contact_v_gt_030
+hard,all,1,1,1.500,1.500,1.760,1,558,558,0,558,0,558,0,0,0,0.0000,1,0,0,0,0,266,292
+hard,same_direction,1,1,1.500,1.500,1.760,1,558,558,0,558,0,558,0,0,0,0.0000,1,0,0,0,0,266,292
+all,all,1,1,1.500,1.500,1.760,1,558,558,0,558,0,558,0,0,0,0.0000,1,0,0,0,0,266,292
+all,same_direction,1,1,1.500,1.500,1.760,1,558,558,0,558,0,558,0,0,0,0.0000,1,0,0,0,0,266,292

@@ -1,0 +1,43 @@
+# 第 3 层：算法参数（algo）——实验里**唯一允许变化**的一层。
+# 冻结后不再手改；新配置另存一份（如 frozen_B.yaml），这样 config hash 才能追溯。
+#
+# 本文件只改一个东西：astar.clearance_margin_m = 0.055 m（曲率裕度前馈）。
+# 用来和 frozen_A.yaml 做对照实验，验证"全局层预留切角深度"能否把
+# 曲率不可满足率压下去。其余参数与 frozen_A.yaml 逐字段相同。
+id: frozen_A_feedforward
+
+astar:
+  e_budget: 2000.0        # 累计电能预算 [J]，硬约束
+  d_min: 0.7              # 策略安全半径 [m]，硬约束（平滑后必须守住）
+  clearance_margin_m: 0.055
+                          # 曲率裕度前馈 [m]：A* 实际按 d_min + 0.055 = 0.755 m 规划，
+                          # 把"κ≤1.5 时 45° 转弯必然切掉的深度"提前留出来。
+                          # 依据：Δ = r(1/cos(Δθ/2) − 1)，r = 1/1.5 = 0.667 m，Δθ = 45°
+                          #     ⇒ Δ = 0.667 × (1/cos(22.5°) − 1) = 0.0552 m ≈ 55 mm
+                          # 0.055 略小于 0.0552，留 0.2 mm 给栅格离散误差。
+                          # 不改变 A* 的搜索逻辑，只抬高其离障门槛。
+  kappa_max: 1.5          # 曲率上限 [1/m]，经 kappa_window_m 折算为搜索侧单步转角上限
+  kappa_window_m: 0.6     # 曲率窗口长度 [m]：max_turn = kappa_max * kappa_window_m
+  v_cruise: 1.0           # 全局路径的名义巡航速度 [m/s]，不得超过 platform.v_max
+  max_labels_per_state: 64
+  max_expansions: 2000000
+
+# B 样条平滑专属参数（与 frozen_A.yaml 相同）。
+bspline:
+  control_spacing_m: 0.8
+  rdp_epsilon_m: 0.15
+  sample_step_m: 0.02
+  max_insert_depth: 3
+
+# 局部规划参数：当前里程碑尚未实现 core/dwa.py，这里先冻结取值占位。
+dwa:
+  w_heading: 0.1
+  w_dist: 0.5
+  w_vel: 0.3
+  horizon: 0.6
+  dt: 0.1
+
+# 舒适性边界（ISO 2631-1 方向的量），第 4 章局部规划使用。
+comfort:
+  a_y_max: 0.8            # 横向加速度上限 [m/s^2]
+  jerk_max: 1.5           # jerk 上限 [m/s^3]

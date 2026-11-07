@@ -26,7 +26,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from core import astar, energy, metrics
+from core import astar, bspline, energy, metrics
 from env import floorplan
 from runner import config as config_module
 
@@ -41,6 +41,21 @@ CSV_COLUMNS: tuple[str, ...] = (
     "success",
     "reason",
     *metrics.METRIC_NAMES,
+    "smooth_status",
+    "smooth_reason",
+    "smooth_fell_back",
+    "smooth_curvature_satisfied",
+    "smooth_curvature_infeasible",
+    "smooth_trackable",
+    "smooth_inserted_points",
+    "smooth_removed_points",
+    "smooth_depth",
+    "smooth_rounds",
+    "smooth_control_points",
+    "smooth_max_abs_curvature",
+    "smooth_min_clearance_m",
+    "smooth_energy_j",
+    "smooth_length_m",
     "expanded",
     "labels_created",
 )
@@ -165,23 +180,48 @@ def build_scene(scenario: dict[str, Any]) -> Scene:
 @dataclass(frozen=True)
 class PlannerSetup:
     astar_params: astar.AStarParams
+    bspline_params: bspline.BSplineParams
     energy_params: energy.EnergyParams
     cruise_speed: float
+    d_min_policy: float = 0.0
+    """策略安全半径（平滑后必须守住）[m]。"""
+
+    clearance_margin_m: float = 0.0
+    """曲率裕度前馈量 [m]；``astar_params.d_min = d_min_policy + 该值``。"""
 
 
 def planner_setup(
     platform: dict[str, Any], algo: dict[str, Any]
 ) -> PlannerSetup:
-    """把已校验的 platform / algo 层转成 core 的显式参数对象。"""
+    """把已校验的 platform / algo 层转成 core 的显式参数对象。
+
+    **曲率裕度前馈**在这里落地：``AStarParams.d_min`` 取
+    ``d_min + clearance_margin_m``（全局层走得保守一点），而
+    ``BSplineParams.d_min`` 仍是 ``d_min``（平滑后必须守住的策略半径）。
+    两者由 ``d_min_policy`` / ``clearance_margin_m`` 显式记录，便于报告区分。
+    """
     effective = config_module.astar_effective_params(algo, platform)
+    smooth = config_module.bspline_effective_params(algo, platform)
     return PlannerSetup(
         astar_params=astar.AStarParams(
             e_budget=float(effective["e_budget"]),
-            d_min=float(effective["d_min"]),
+            d_min=float(effective["d_min_astar"]),
             kappa_max=float(effective["kappa_max"]),
             kappa_window_m=float(effective["kappa_window_m"]),
             max_labels_per_state=int(effective["max_labels_per_state"]),
             max_expansions=int(effective["max_expansions"]),
+            collect_pareto=bool(effective.get("collect_pareto", False)),
+            enforce_dmin=bool(effective.get("enforce_dmin", True)),
+            soft_penalty_weight=float(effective.get("soft_penalty_weight", 0.0)),
+        ),
+        bspline_params=bspline.BSplineParams(
+            kappa_max=float(smooth["kappa_max"]),
+            d_min=float(smooth["d_min"]),
+            e_budget=float(smooth["e_budget"]),
+            control_spacing_m=float(smooth["control_spacing_m"]),
+            rdp_epsilon_m=float(smooth["rdp_epsilon_m"]),
+            sample_step_m=float(smooth["sample_step_m"]),
+            max_insert_depth=int(smooth["max_insert_depth"]),
         ),
         energy_params=energy.EnergyParams(
             mass=float(platform["mass"]),
@@ -192,6 +232,8 @@ def planner_setup(
             battery_resistance=float(platform["battery_resistance"]),
         ),
         cruise_speed=float(effective["v_cruise"]),
+        d_min_policy=float(effective["d_min"]),
+        clearance_margin_m=float(effective["clearance_margin_m"]),
     )
 
 
@@ -209,6 +251,23 @@ def plan_path(scene: Scene, setup: PlannerSetup) -> astar.PathResult:
         slope_rad=scene.slope_rad,
         origin=scene.origin,
         clearance=scene.clearance,
+    )
+
+
+def smooth_result(
+    result: astar.PathResult, scene: Scene, setup: PlannerSetup
+) -> bspline.SmoothPath:
+    """把 A* 折线交给 B 样条平滑；约束口径与 A* 完全一致（共用参数）。"""
+    return bspline.smooth_path(
+        result.xy,
+        params=setup.bspline_params,
+        clearance_field=scene.clearance,
+        resolution=scene.resolution,
+        speed=setup.cruise_speed,
+        energy_params=setup.energy_params,
+        c_rr=scene.c_rr,
+        slope_rad=scene.slope_rad,
+        origin=scene.origin,
     )
 
 
@@ -244,6 +303,7 @@ def build_trajectory(
     body_radius: float,
     d_min: float,
     e_budget: float,
+    smooth: bspline.SmoothPath | None = None,
 ) -> Trajectory:
     """把路径按恒定巡航速度采样成参考轨迹，朝向受 ``w_max`` 限速。
 
@@ -251,18 +311,43 @@ def build_trajectory(
     ``jerk`` 为 0、角速度为纯几何量；真正的速度/朝向平滑由
     core/bspline.py 与 core/dwa.py 在后续里程碑给出。全局层的硬约束
     （离障、能耗）在这里逐点复核，违反率应当是 0。
+
+    ``smooth`` 不为 ``None`` 时用平滑后的几何替换 A* 折线：穿越的每个采样点
+    都来自 B 样条（或回退折线），离障与能耗在平滑阶段已逐点复核，这里再按
+    采样步长复核一次，作为"约束违反率为零"的最后一道关口。
     """
     if not result.success:
         return _empty_trajectory()
 
-    times = [0.0]
-    points = [result.xy[0].copy()]
-    raw_yaw = [float(result.yaw[0])]
-    energies = [float(result.energy_j[0])]
-    clearances = [float(result.clearance[0])]
+    if smooth is not None:
+        points_array = np.asarray(smooth.xy, dtype=float)
+        yaw_array = np.asarray(smooth.yaw, dtype=float)
+        clearance_array = np.asarray(smooth.clearance, dtype=float)
+        steps = np.linalg.norm(np.diff(points_array, axis=0), axis=1)
+        step_length = np.concatenate([[0.0], steps])
+        total_length = float(steps.sum())
+        # 平滑后的电能按段均摊：口径与 curve_energy 一致，总量守恒。
+        segment_energy = (
+            steps / total_length * float(smooth.energy_j)
+            if total_length > 0
+            else np.zeros_like(steps)
+        )
+        segment_energy = np.concatenate([[0.0], segment_energy])
+    else:
+        points_array = result.xy
+        yaw_array = result.yaw
+        clearance_array = result.clearance
+        step_length = result.step_length
+        segment_energy = result.step_energy
 
-    for index in range(1, len(result.xy)):
-        distance = float(result.step_length[index])
+    times = [0.0]
+    points = [points_array[0].copy()]
+    raw_yaw = [float(yaw_array[0])]
+    energies = [0.0]
+    clearances = [float(clearance_array[0])]
+
+    for index in range(1, len(points_array)):
+        distance = float(step_length[index])
         if distance <= 0.0:
             continue
         substeps = max(1, int(math.ceil(distance / (dt * cruise_speed))))
@@ -270,15 +355,16 @@ def build_trajectory(
             fraction = step / substeps
             times.append(times[-1] + distance / (substeps * cruise_speed))
             points.append(
-                result.xy[index - 1] + fraction * (result.xy[index] - result.xy[index - 1])
+                points_array[index - 1]
+                + fraction * (points_array[index] - points_array[index - 1])
             )
-            raw_yaw.append(float(result.yaw[index]))
+            raw_yaw.append(float(yaw_array[index]))
             energies.append(
-                energies[-1] + float(result.step_energy[index]) / substeps
+                energies[-1] + float(segment_energy[index]) / substeps
             )
             clearances.append(
-                result.clearance[index - 1]
-                + fraction * (result.clearance[index] - result.clearance[index - 1])
+                clearance_array[index - 1]
+                + fraction * (clearance_array[index] - clearance_array[index - 1])
             )
 
     t = np.asarray(times, dtype=float)
@@ -300,10 +386,10 @@ def build_trajectory(
 
     speed = np.full_like(t, float(cruise_speed))
     energy_array = np.asarray(energies, dtype=float)
-    clearance_array = np.asarray(clearances, dtype=float)
-    collision = clearance_array < float(body_radius)
+    clearance_values = np.asarray(clearances, dtype=float)
+    collision = clearance_values < float(body_radius)
     violation = (
-        (clearance_array + 1e-9 < float(d_min))
+        (clearance_values + 1e-9 < float(d_min))
         | (energy_array > float(e_budget) + 1e-9)
         | collision
     )
@@ -314,7 +400,7 @@ def build_trajectory(
         speed=speed,
         yaw_rate=yaw_rate,
         energy_j=energy_array,
-        clearance=clearance_array,
+        clearance=clearance_values,
         collision=collision,
         violation=violation,
     )
@@ -407,17 +493,24 @@ def run_experiment(
 
     rows: list[dict[str, Any]] = []
     trajectories: list[Trajectory] = []
+    smooth_paths: list[bspline.SmoothPath] = []
     for repeat in range(repeat_count):
         repeat_seed = base_seed + repeat
         result = plan_path(scene, setup)
+        smooth = smooth_result(result, scene, setup) if result.success else None
         trajectory = build_trajectory(
             result,
             dt=dt_effective,
             cruise_speed=setup.cruise_speed,
             w_max=float(resolved.platform["w_max"]),
             body_radius=float(resolved.platform["body_radius"]),
-            d_min=float(setup.astar_params.d_min),
+            # 违反判据用**策略安全半径**（平滑后必须守住的 d_min），
+            # 不是 A* 的规划门槛：启用曲率裕度前馈后，A* 的门槛是
+            # d_min + clearance_margin_m，用它判违反会把"合法但比前馈门槛贴墙"
+            # 的平滑路径误判成约束违反（实测 12f7c0b0 会报 25.3% 违反率）。
+            d_min=float(setup.bspline_params.d_min),
             e_budget=float(setup.astar_params.e_budget),
+            smooth=smooth,
         )
         summary = metrics.summarize(
             t=trajectory.t,
@@ -429,6 +522,43 @@ def run_experiment(
             collision=trajectory.collision,
             violations=trajectory.violation,
         )
+        smooth_fields: dict[str, Any] = {
+            "smooth_status": "skipped",
+            "smooth_reason": "plan_failed",
+            "smooth_fell_back": 0,
+            "smooth_curvature_satisfied": 0,
+            "smooth_curvature_infeasible": 0,
+            "smooth_trackable": 0,
+            "smooth_inserted_points": 0,
+            "smooth_removed_points": 0,
+            "smooth_depth": 0,
+            "smooth_rounds": 0,
+            "smooth_control_points": 0,
+            "smooth_max_abs_curvature": 0.0,
+            "smooth_min_clearance_m": 0.0,
+            "smooth_energy_j": 0.0,
+            "smooth_length_m": 0.0,
+        }
+        if smooth is not None:
+            smooth_fields = {
+                "smooth_status": smooth.status,
+                "smooth_reason": smooth.report.reason,
+                "smooth_fell_back": int(smooth.fell_back),
+                # 曲率可满足性与"是否产出样条"分开记录：回退产物违反曲率约束，
+                # 不是可跟踪的参考轨迹（见 core/bspline.py 的模块说明）。
+                "smooth_curvature_satisfied": int(smooth.curvature_ok),
+                "smooth_curvature_infeasible": int(smooth.curvature_infeasible),
+                "smooth_trackable": int(smooth.trackable),
+                "smooth_inserted_points": smooth.report.inserted_points,
+                "smooth_removed_points": smooth.report.removed_points,
+                "smooth_depth": smooth.report.depth,
+                "smooth_rounds": smooth.report.rounds,
+                "smooth_control_points": smooth.report.control_points,
+                "smooth_max_abs_curvature": smooth.max_abs_curvature,
+                "smooth_min_clearance_m": smooth.min_clearance,
+                "smooth_energy_j": smooth.energy_j,
+                "smooth_length_m": smooth.length_m,
+            }
         row: dict[str, Any] = {
             "config_hash": resolved.config_hash,
             "run_id": run_id,
@@ -437,11 +567,13 @@ def run_experiment(
             "success": int(result.success),
             "reason": result.reason,
             **summary,
+            **smooth_fields,
             "expanded": result.expanded,
             "labels_created": result.labels_created,
         }
         rows.append(row)
         trajectories.append(trajectory)
+        smooth_paths.append(smooth)
 
     run_dir.mkdir(parents=True, exist_ok=False)
     git_commit, git_dirty = _git_metadata(PROJECT_ROOT)
@@ -457,6 +589,22 @@ def run_experiment(
 
     for repeat, trajectory in enumerate(trajectories):
         filename = "trajectory.npz" if repeat == 0 else f"trajectory_{repeat:03d}.npz"
+        smooth_entry = smooth_paths[repeat]
+        extras: dict[str, np.ndarray] = {
+            "start_xy": np.asarray(scene.start_xy, dtype=float),
+            "goal_xy": np.asarray(scene.goal_xy, dtype=float),
+            "config_hash": np.asarray(resolved.config_hash),
+            "seed": np.asarray(rows[repeat]["seed"]),
+        }
+        if smooth_entry is not None:
+            extras.update(
+                smooth_xy=smooth_entry.xy,
+                smooth_s=smooth_entry.s,
+                smooth_curvature=smooth_entry.curvature,
+                smooth_yaw=smooth_entry.yaw,
+                smooth_clearance=smooth_entry.clearance,
+                smooth_polyline=smooth_entry.polyline,
+            )
         np.savez(
             run_dir / filename,
             t=trajectory.t,
@@ -468,10 +616,7 @@ def run_experiment(
             clearance=trajectory.clearance,
             collision=trajectory.collision,
             violation=trajectory.violation,
-            start_xy=np.asarray(scene.start_xy, dtype=float),
-            goal_xy=np.asarray(scene.goal_xy, dtype=float),
-            config_hash=np.asarray(resolved.config_hash),
-            seed=np.asarray(rows[repeat]["seed"]),
+            **extras,
         )
 
     return ExperimentResult(

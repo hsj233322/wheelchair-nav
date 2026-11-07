@@ -1,0 +1,14 @@
+scenario_id,grade,source,route_index,length_m,energy_j,energy_per_m,min_clearance_m,on_front,feasible
+houseexpo_d398cc42,easy,route,0,9.3243,472.036,50.624,3.3500,1,1
+houseexpo_d398cc42,easy,collect_pareto,,9.3243,470.864,50.499,,1,1
+houseexpo_0df8d098,medium,route,0,10.6385,472.180,44.384,0.7116,1,1
+houseexpo_0df8d098,medium,route,1,10.8728,479.785,44.127,0.7116,0,1
+houseexpo_0df8d098,medium,route,2,10.9314,481.686,44.065,0.8500,0,1
+houseexpo_0df8d098,medium,collect_pareto,,10.6385,470.969,44.270,,1,1
+houseexpo_384ec5cb,hard,route,0,11.6941,462.994,39.592,0.7116,1,1
+houseexpo_384ec5cb,hard,route,1,11.8598,468.372,39.492,0.7116,0,1
+houseexpo_384ec5cb,hard,route,2,12.0941,475.977,39.356,0.7116,0,1
+houseexpo_384ec5cb,hard,route,3,12.3184,483.981,39.289,0.7310,0,1
+houseexpo_384ec5cb,hard,route,4,12.3184,483.981,39.289,0.7500,0,1
+houseexpo_384ec5cb,hard,collect_pareto,,11.6941,462.994,39.592,,1,1
+houseexpo_384ec5cb,hard,collect_pareto,,11.7770,459.405,39.009,,1,1

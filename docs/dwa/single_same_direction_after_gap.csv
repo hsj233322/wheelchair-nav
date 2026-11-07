@@ -1,0 +1,5 @@
+group,obstacle_kind,tasks,task_ok,periods,fallback_periods,physical_collision_frames,dynamic_contact_periods,contact_gap_m,tasks_below_contact_gap,gap_realized_p00_m,gap_realized_p10_m,gap_realized_p25_m,gap_realized_p50_m,gap_realized_p75_m,gap_realized_p100_m,gap_realized_min_m,gap_pred_p50_m
+hard,all,1,1,591,5,0,0,0.880,0,1.1400,1.1400,1.1400,1.1400,1.1400,1.1400,1.1400,1.1300
+hard,same_direction,1,1,591,5,0,0,0.880,0,1.1400,1.1400,1.1400,1.1400,1.1400,1.1400,1.1400,1.1300
+all,all,1,1,591,5,0,0,0.880,0,1.1400,1.1400,1.1400,1.1400,1.1400,1.1400,1.1400,1.1300
+all,same_direction,1,1,591,5,0,0,0.880,0,1.1400,1.1400,1.1400,1.1400,1.1400,1.1400,1.1400,1.1300

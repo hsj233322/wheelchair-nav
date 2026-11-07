@@ -1,0 +1,7 @@
+grade,group,algo,tasks,plan_ok_tasks,curvature_satisfied,curvature_infeasible,curvature_infeasible_rate,median_smooth_clearance_m,median_smooth_energy_j,median_astar_length_m,median_smooth_length_m,median_max_abs_curvature
+easy,frozen_A,frozen_A,8,8,8,0,0.000,1.7805,342.9,8.675,8.401,0.591
+easy,frozen_A_feedforward,frozen_A_feedforward,8,8,8,0,0.000,1.7805,342.9,8.675,8.401,0.591
+hard,frozen_A,frozen_A,7,7,2,5,0.714,0.7170,535.3,11.694,11.485,0.376
+hard,frozen_A_feedforward,frozen_A_feedforward,7,0,0,7,1.000,-,-,-,-,-
+medium,frozen_A,frozen_A,5,5,2,3,0.600,0.7935,453.1,10.638,10.390,0.647
+medium,frozen_A_feedforward,frozen_A_feedforward,5,5,3,2,0.400,0.7315,321.9,10.697,10.422,1.011

@@ -21,6 +21,27 @@ def imports_of(path: Path) -> set[str]:
     return modules
 
 
+def calls_of(path: Path) -> set[str]:
+    """收集被**调用**的名字。
+
+    注意：不能用 ``"Path(" in source`` 这种子串匹配判断文件 IO——它会把
+    ``SmoothPath(...)`` 这类类构造误判成文件操作。按调用目标判断才不含歧义。
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        if isinstance(function, ast.Name):
+            names.add(function.id)
+        elif isinstance(function, ast.Attribute):
+            names.add(function.attr)
+            if isinstance(function.value, ast.Name):
+                names.add(f"{function.value.id}.{function.attr}")
+    return names
+
+
 def test_core_does_not_import_runner_or_config() -> None:
     for path in sorted(CORE.glob("*.py")):
         for module in imports_of(path):
@@ -31,10 +52,11 @@ def test_core_does_not_import_runner_or_config() -> None:
 
 
 def test_core_does_not_open_files() -> None:
+    forbidden = {"open", "Path", "read_text", "write_text", "read_bytes", "write_bytes"}
     for path in sorted(CORE.glob("*.py")):
-        source = path.read_text(encoding="utf-8")
-        assert "open(" not in source, f"{path.name} 不应做文件 IO"
-        assert "Path(" not in source, f"{path.name} 不应做文件 IO"
+        called = calls_of(path)
+        violations = sorted(called & forbidden)
+        assert not violations, f"{path.name} 不应做文件 IO（调用了 {violations}）"
 
 
 def test_floorplan_conversion_stays_pure() -> None:

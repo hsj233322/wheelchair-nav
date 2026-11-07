@@ -1,0 +1,5 @@
+tier,tasks,bottleneck_min_m,bottleneck_median_m,bottleneck_max_m,meeting_width_required_m,tasks_below_meeting_width,scenario_ids
+easy,8,2.405,5.498,6.699,1.760,0,houseexpo_07432f2d houseexpo_0d78ffe6 houseexpo_30a18345 houseexpo_64b86794 houseexpo_b2bcaf5d houseexpo_d0aeed69 houseexpo_d398cc42 houseexpo_e888f399
+medium,5,1.620,1.700,1.711,1.760,5,houseexpo_0df8d098 houseexpo_1241c62f houseexpo_12f7c0b0 houseexpo_8bb3c35d houseexpo_c5a07d7d
+hard,7,1.461,1.499,1.500,1.760,7,houseexpo_277f75f1 houseexpo_384ec5cb houseexpo_5427f9b0 houseexpo_7381e847 houseexpo_ca1d6e23 houseexpo_eef4fbdd houseexpo_fb442a01
+narrowdoor,3,0.749,0.950,1.150,1.760,3,narrowdoor_w080 narrowdoor_w100 narrowdoor_w120
