@@ -1,49 +1,67 @@
-# 地形标签规则：房间类型 -> 地面材质（假设，非实测）
+# 地形材质规则 —— **受控实验因子，不是实测材质分布**
 #
-# HouseExpo 只提供户型轮廓与房间包围盒，**没有地面材质信息**。这里的映射是
-# **基于房间类型的假设**，用于让"能耗与地形相关"这件事在场景里有区分度，
-# 不是实测数据；论文里必须按假设声明，并配合 c_rr 敏感性分析使用。
+# ## 为什么改成"受控因子"
 #
-# c_rr（滚动阻力系数）取值参考公开文献对室内地面的常见报道范围
-# （瓷砖/水泥约 0.010~0.020，木地板约 0.02~0.04），此处取区间内的中值设定；
-# 它不来自本课题的实测标定。
+# HouseExpo 只有户型轮廓与房间包围盒，**没有地面材质**。早期做法按房间类型映射材质
+# （厨房/卫生间 -> 瓷砖、卧室/客厅 -> 木地板、走廊 -> 水泥），只有
+# `c_rr = 0.015 / 0.020 / 0.025` 三档，**跨度 1.67 倍**；而论文第 2 章的材质表是
+# 水泥 0.015 / 草地 0.03 / 石子路 0.04 / 坑洼 0.06（**跨度 4 倍**）。
+# 后果（已实测）：能耗加权 A* 与仅长度 A* 在 20/20 个任务上路径完全相同，
+# (长度, 能耗) Pareto 前沿在 20/20 个任务上退化为单点 —— 高阻绕行永远被支配。
 #
-# 绘制顺序（重叠处理）：generic_room_types 里的泛化类别先画，具体类别后画，
-# 因此具体标注赢；同优先级按 (类别名, 文件内出现序号) 排序。该顺序由
-# env/floorplan.py::ordered_room_boxes 实现，保证同一户型两次转换结果一致。
-version: 1
+# 因此本轮把**材质空间分布明确定义为受控实验因子**：
+#
+# * 几何仍完全来自真实 HouseExpo 户型（轮廓、房间、门洞都不动）；
+# * 自由区按目标尺度 `zone_size_m` 递归二分成**连通矩形分区**；
+# * 分区按目标**面积占比**分配材质，分三档：低阻为主 / 混合 / 高阻为主；
+# * 每一档都覆盖论文材质表的四档 `c_rr`（0.015 / 0.03 / 0.04 / 0.06）。
+#
+# **高阻材质是地毯 / 防滑垫 / 地面格栅这类室内真实做法**，不是把房间标成
+# 0.06 的坑洼地貌（那不符合室内地面的物理常识）。
+#
+# `c_rr` 取值参考公开文献对室内地面的常见报道范围，**不来自本课题实测标定**；
+# 论文必须按"假设 + 受控因子"表述，并配合 ±30% 敏感性分析
+# （`analysis/terrain_sensitivity.py`，同时扫 `platform.p_aux`）。
+#
+# ## 分区与绘制顺序
+#
+# 分区由 `env/terrain_partition.py` 以 `(plan_id, tier)` 为键**确定性**生成：
+# 同一户型同一档两次转换结果逐字段一致；档位由 `tier_for_plan()` 从 `plan_id`
+# 的哈希派生（材质档位是**场景属性**，不随采样随机数漂移）。
+# 绘制顺序 = 分区列表顺序（后画覆盖先画），与
+# `env/terrain_partition.py::material_class_grid` 的采样规则一致。
+version: 2
 
-default_class: concrete      # 未标注区域 / 未知房间类型
+default_class: concrete      # 未覆盖区域 / 兜底材质：水泥地面
 
+# 材质库（**假设取值**）：覆盖论文材质表的四档
 classes:
-  tile:     {c_rr: 0.015, slope_deg: 0.0}   # 厨房、卫生间：瓷砖
-  wood:     {c_rr: 0.025, slope_deg: 0.0}   # 卧室、客厅、餐厅、书房：木地板
-  concrete: {c_rr: 0.020, slope_deg: 0.0}   # 走廊、门厅、未标注区域：水泥
+  tile:     {c_rr: 0.015, slope_deg: 0.0, label_zh: 瓷砖 / 抛光水泥}
+  concrete: {c_rr: 0.030, slope_deg: 0.0, label_zh: 水泥地面（含室外水泥）}
+  wood:     {c_rr: 0.040, slope_deg: 0.0, label_zh: 短绒地毯 / 防滑垫}
+  grating:  {c_rr: 0.060, slope_deg: 0.0, label_zh: 地面格栅 / 粗糙防滑区}
 
-generic_room_types:      # SUNCG/HouseExpo 的泛化标签，不猜材质
-  - room
-  - indoor
+# 受控材质分布三档：`class 名 -> 自由区面积占比目标`（和为 1）
+material_partition:
+  version: 1
+  zone_size_m: 2.2           # 分区目标边长 [m]（受控因子；不是实测尺度）
+  default_tier: mixed        # 冻结场景默认用"混合"档
+  min_free_cells: 4          # 少于该自由单元数的分区丢弃，避免微分区
+  tiers:
+    low_resistance:          # 低阻为主：面积加权期望 c_rr = 0.0239（86% 面积 <= 0.03）
+      tile: 0.55
+      concrete: 0.31
+      wood: 0.10
+      grating: 0.04
+    mixed:                   # 混合：面积加权期望 c_rr = 0.0321
+      tile: 0.30
+      concrete: 0.28
+      wood: 0.30
+      grating: 0.12
+    high_resistance:         # 高阻为主：面积加权期望 c_rr = 0.0392（66% 面积 >= 0.04）
+      tile: 0.12
+      concrete: 0.22
+      wood: 0.44
+      grating: 0.22
 
-room_type_to_class:
-  kitchen: tile
-  bathroom: tile
-  toilet: tile
-  bedroom: wood
-  guest_room: wood
-  living_room: wood
-  dining_room: wood
-  office: wood
-  hallway: concrete
-  corridor: concrete
-  lobby: concrete
-  entryway: concrete
-  hall: concrete
-  # 以下房间类型在取样户型中出现，但没有明确的地面材质语义，按默认材质处理
-  room: concrete
-  indoor: concrete
-  garage: concrete
-  balcony: concrete
-  loggia: concrete
-  storage: concrete
-
-note: "基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml"
+note: "受控实验因子：真实户型几何 + 按受控面积占比叠加的材质分区；c_rr 取值来自公开文献范围，非实测标定。"

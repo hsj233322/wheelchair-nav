@@ -111,6 +111,12 @@ def _check_int(value: Any, where: str, *, minimum: int) -> int:
     return value
 
 
+def _check_bool(value: Any, where: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{where} 必须是布尔值（true/false），实际为 {value!r}")
+    return value
+
+
 def _check_str(value: Any, where: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"{where} 必须是非空字符串，实际为 {value!r}")
@@ -230,8 +236,19 @@ _QUALITY_KEYS = {
     "note",
 }
 _MAP_KEYS = {"resolution", "shape", "origin", "walls", "polygons", "inflation_m"}
-_TERRAIN_KEYS = {"default", "patches", "note"}
+_TERRAIN_KEYS = {"default", "patches", "note", "partition"}
 _TERRAIN_PATCH_KEYS = {"id", "rect", "c_rr", "slope_deg"}
+_TERRAIN_PARTITION_KEYS = {
+    "kind",
+    "tier",
+    "tier_label_zh",
+    "zone_size_m",
+    "expected_c_rr",
+    "classes",
+    "target_shares",
+    "zones",
+    "note",
+}
 _SOURCE_KEYS = {"dataset", "file", "sha256", "url", "version", "license", "note"}
 _MAX_ABS_SLOPE_DEG = 30.0
 
@@ -371,7 +388,11 @@ def validate_scenario(doc: Mapping[str, Any]) -> dict[str, Any]:
     if "note" in terrain and not isinstance(terrain["note"], str):
         raise ConfigError("scenario.terrain.note 必须是字符串")
     default_terrain = _require_mapping(terrain["default"], "scenario.terrain.default")
-    _reject_unknown(default_terrain, {"c_rr", "slope_deg"}, "scenario.terrain.default")
+    _reject_unknown(
+        default_terrain,
+        {"c_rr", "slope_deg", "label_zh", "class"},
+        "scenario.terrain.default",
+    )
     _require_keys(default_terrain, {"c_rr", "slope_deg"}, "scenario.terrain.default")
     _check_terrain_values(default_terrain, "scenario.terrain.default")
     patches = terrain.get("patches", [])
@@ -387,18 +408,107 @@ def validate_scenario(doc: Mapping[str, Any]) -> dict[str, Any]:
         if x0 < x_min - 1e-9 or y0 < y_min - 1e-9 or x1 > x_max + 1e-9 or y1 > y_max + 1e-9:
             raise ConfigError(f"{where}.rect 超出地图范围")
         _check_terrain_values(patch, where)
+    if "partition" in terrain:
+        _validate_terrain_partition(
+            terrain["partition"], "scenario.terrain.partition"
+        )
     return dict(doc)
 
 
-_ALGO_KEYS = {"id", "astar", "dwa", "comfort"}
+def _validate_terrain_partition(value: Any, where: str) -> None:
+    """``terrain.partition`` 是**受控材质因子**的声明（论文可追溯用）。
+
+    它只描述"材质怎么分"，不参与任何算法参数；这里做结构校验并强制
+    ``kind == "controlled_factor"``，避免有人把它当成实测材质分布。
+    """
+    doc = _require_mapping(value, where)
+    _reject_unknown(doc, _TERRAIN_PARTITION_KEYS, where)
+    _require_keys(doc, {"kind", "tier", "classes", "target_shares"}, where)
+    if str(doc["kind"]) != "controlled_factor":
+        raise ConfigError(
+            f"{where}.kind 必须是 'controlled_factor'（材质分布是受控实验因子，"
+            f"不是实测数据），实际为 {doc['kind']!r}"
+        )
+    _check_str(doc["tier"], f"{where}.tier")
+    if "tier_label_zh" in doc:
+        _check_str(doc["tier_label_zh"], f"{where}.tier_label_zh")
+    if "zone_size_m" in doc:
+        _check_number(doc["zone_size_m"], f"{where}.zone_size_m", minimum=0.0)
+    if "expected_c_rr" in doc:
+        _check_number(doc["expected_c_rr"], f"{where}.expected_c_rr", minimum=0.0)
+    if "zones" in doc:
+        _check_int(doc["zones"], f"{where}.zones", minimum=0)
+    if "note" in doc:
+        _check_str(doc["note"], f"{where}.note")
+
+    classes = _require_mapping(doc["classes"], f"{where}.classes")
+    if not classes:
+        raise ConfigError(f"{where}.classes 必须是非空映射")
+    for name, props in classes.items():
+        class_where = f"{where}.classes.{name}"
+        props = _require_mapping(props, class_where)
+        _reject_unknown(props, {"c_rr", "slope_deg", "label_zh"}, class_where)
+        _require_keys(props, {"c_rr", "slope_deg"}, class_where)
+        _check_terrain_values(props, class_where)
+        if "label_zh" in props:
+            _check_str(props["label_zh"], f"{class_where}.label_zh")
+
+    shares = _require_mapping(doc["target_shares"], f"{where}.target_shares")
+    if not shares:
+        raise ConfigError(f"{where}.target_shares 必须是非空映射")
+    total = 0.0
+    for name, share in shares.items():
+        if str(name) not in classes:
+            raise ConfigError(f"{where}.target_shares.{name} 引用了未声明材质")
+        total += _check_number(share, f"{where}.target_shares.{name}", minimum=0.0)
+    if abs(total - 1.0) > 1e-6:
+        raise ConfigError(f"{where}.target_shares 的占比之和必须为 1，实际为 {total}")
+
+
+_ALGO_KEYS = {"id", "astar", "bspline", "dwa", "comfort"}
 _ASTAR_REQUIRED = {"e_budget", "d_min", "kappa_max"}
 _ASTAR_OPTIONAL = {
     "kappa_window_m",
     "v_cruise",
     "max_labels_per_state",
     "max_expansions",
+    # 曲率裕度前馈（2026-10-29）：全局层在 d_min 之外**额外**预留的安全裕度 [m]，
+    # 使得 A* 规划出的折线离障 = d_min + clearance_margin_m，从而给平滑切角留出空间。
+    # 它只抬高 A* 的离障门槛，**不改变 A* 的搜索逻辑**（仍是同一套 8 邻域多目标标签）。
+    "clearance_margin_m",
+    # 第 3 章"硬约束 vs 软惩罚"对照开关（2026-11-06）：
+    #   enforce_dmin=True （默认）-> d_min 是硬约束，违反率恒为 0；
+    #   enforce_dmin=False        -> d_min 转为代价项 w*max(0, d_min-clearance)。
+    # 只影响优化方式，不新增任何算法能力。
+    "enforce_dmin",
+    "soft_penalty_weight",
+    # 第 3 章 Pareto 分析：把搜索跑完并返回终点的 (长度, 能耗) 非支配集。
+    "collect_pareto",
 }
-_DWA_KEYS = {"w_heading", "w_dist", "w_vel", "horizon", "dt"}
+# 平滑专属参数。注意这里**故意不包含** kappa_max / d_min / e_budget：
+# 它们与 A* 是同一个约束，必须共用 astar 段的值，不允许在 bspline 段重复声明
+# （重复声明就等于允许两套口径分裂，正是 7.7 第 2 条禁止的）。
+_BSPLINE_KEYS = {
+    "control_spacing_m",
+    "rdp_epsilon_m",
+    "sample_step_m",
+    "max_insert_depth",
+}
+_DWA_KEYS = {
+    "w_heading",
+    "w_dist",
+    "w_vel",
+    "horizon",
+    "dt",
+    # 6 个采样与安全参数（2026-10-29 接入 DWA 里程碑，均在 algo 层、冻结使用）
+    "v_samples",
+    "w_samples",
+    "w_clearance",
+    "jerk_weight",
+    "gap_head_on_m",
+    "gap_overtake_m",
+    "lateral_deviation_max_m",
+}
 _COMFORT_KEYS = {"a_y_max", "jerk_max"}
 
 
@@ -426,12 +536,55 @@ def validate_algo(doc: Mapping[str, Any]) -> dict[str, Any]:
         _check_int(astar["max_labels_per_state"], "algo.astar.max_labels_per_state", minimum=1)
     if "max_expansions" in astar:
         _check_int(astar["max_expansions"], "algo.astar.max_expansions", minimum=1)
+    if "clearance_margin_m" in astar:
+        _check_number(astar["clearance_margin_m"], "algo.astar.clearance_margin_m",
+                      minimum=0.0)
+    if "enforce_dmin" in astar:
+        _check_bool(astar["enforce_dmin"], "algo.astar.enforce_dmin")
+    if "collect_pareto" in astar:
+        _check_bool(astar["collect_pareto"], "algo.astar.collect_pareto")
+    if "soft_penalty_weight" in astar:
+        _check_number(astar["soft_penalty_weight"], "algo.astar.soft_penalty_weight",
+                      minimum=0.0)
 
+    if "bspline" in doc:
+        bspline = _require_mapping(doc["bspline"], "algo.bspline")
+        # 先查"共用约束被重复声明"：这类错误必须给出**为什么**不允许，
+        # 而不是笼统地报成"未知字段"。
+        shared = sorted(set(bspline) & {"kappa_max", "d_min", "e_budget"})
+        if shared:
+            raise ConfigError(
+                "algo.bspline 不得重复声明 " + "、".join(shared) + "；"
+                "曲率上限 / 离障距离 / 能耗预算与 A* 是同一组硬约束，"
+                "必须共用 algo.astar 下的同名参数（见交接文档 7.7 第 2 条）"
+            )
+        _reject_unknown(bspline, _BSPLINE_KEYS, "algo.bspline")
+        for key in ("control_spacing_m", "rdp_epsilon_m", "sample_step_m"):
+            if key in bspline:
+                _check_number(bspline[key], f"algo.bspline.{key}", minimum=0.0,
+                              minimum_inclusive=False)
+        if "max_insert_depth" in bspline:
+            _check_int(bspline["max_insert_depth"], "algo.bspline.max_insert_depth",
+                       minimum=0)
+            if int(bspline["max_insert_depth"]) > 8:
+                raise ConfigError(
+                    f"algo.bspline.max_insert_depth 必须 <= 8，实际为 "
+                    f"{bspline['max_insert_depth']}"
+                )
     if "dwa" in doc:
         dwa = _require_mapping(doc["dwa"], "algo.dwa")
         _reject_unknown(dwa, _DWA_KEYS, "algo.dwa")
         for key in _DWA_KEYS & set(dwa):
             _check_number(dwa[key], f"algo.dwa.{key}", minimum=0.0)
+        for key in ("v_samples", "w_samples"):
+            if key in dwa and float(dwa[key]) < 1.0:
+                raise ConfigError(f"algo.dwa.{key} 必须 >= 1，实际为 {dwa[key]}")
+        if "dt" in dwa and "horizon" in dwa:
+            if float(dwa["dt"]) > float(dwa["horizon"]) + 1e-9:
+                raise ConfigError(
+                    f"algo.dwa.dt = {dwa['dt']} 不能大于 algo.dwa.horizon = "
+                    f"{dwa['horizon']}"
+                )
     if "comfort" in doc:
         comfort = _require_mapping(doc["comfort"], "algo.comfort")
         _reject_unknown(comfort, _COMFORT_KEYS, "algo.comfort")
@@ -596,16 +749,106 @@ def read_config(path: str | Path) -> dict[str, Any]:
 def astar_effective_params(
     algo: Mapping[str, Any], platform: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """把 algo.astar 补齐默认值，供 runner 直接构造 core.astar.AStarParams。"""
+    """把 algo.astar 补齐默认值，供 runner 直接构造 core.astar.AStarParams。
+
+    **曲率裕度前馈**：``d_min`` 是**策略安全半径**（平滑后必须守住的硬约束）；
+    ``clearance_margin_m`` 是在它之上、**只给全局层**额外预留的裕度。因此传给 A* 的
+    是 ``d_min + clearance_margin_m``，而平滑侧仍校验 ``d_min`` 本身。
+
+    这样做的依据是解析判据（Δθ = 45°、κ_max = 1.5 1/m 时切角深度）：
+
+        Δ_切角 = r (1/cos(Δθ/2) − 1)，  r = 1/κ_max = 0.667 m  ⇒  Δ ≈ 55 mm
+
+    若全局折线的离障只有 ``d_min + 11.6 mm``，任何满足 κ ≤ κ_max 的平滑曲线都必然
+    越界（几何上无解）。前馈就是把这段**已知会被切掉的深度**提前在全局层留出来。
+    它只抬高离障门槛，**不改 A* 的搜索逻辑**（同一套 8 邻域多目标标签）。
+    """
     astar = algo["astar"]
+    margin = float(astar.get("clearance_margin_m", 0.0))
+    d_min = float(astar["d_min"])
     return {
         "e_budget": float(astar["e_budget"]),
-        "d_min": float(astar["d_min"]),
+        "d_min": d_min,
+        "d_min_astar": d_min + margin,
+        "clearance_margin_m": margin,
         "kappa_max": float(astar["kappa_max"]),
         "kappa_window_m": float(astar.get("kappa_window_m", 0.6)),
         "v_cruise": float(astar.get("v_cruise", platform["v_max"])),
         "max_labels_per_state": int(astar.get("max_labels_per_state", 64)),
         "max_expansions": int(astar.get("max_expansions", 2_000_000)),
+        # 第 3 章软/硬对照开关（默认 True / 0.0 = 既有行为）
+        "enforce_dmin": bool(astar.get("enforce_dmin", True)),
+        "soft_penalty_weight": float(astar.get("soft_penalty_weight", 0.0)),
+        "collect_pareto": bool(astar.get("collect_pareto", False)),
+    }
+
+
+def bspline_effective_params(
+    algo: Mapping[str, Any], platform: Mapping[str, Any]
+) -> dict[str, Any]:
+    """平滑参数：**约束三件套从 astar 段取**，平滑专属参数取 bspline 段。
+
+    这是 7.7 第 2 条"共用同一个 kappa_max"的落地位置——平滑侧与搜索侧唯一
+    的约束来源都是 ``algo.astar``，不存在第二份可被改动的拷贝。``d_min`` 与
+    ``e_budget`` 同理：平滑会把几何长度改掉，但约束口径不能跟着变。
+
+    **注意 d_min 取 ``astar["d_min"]`` 而不是 ``d_min_astar``**：前馈裕度
+    ``clearance_margin_m`` 只作用于全局层（让 A* 走得更保守），平滑侧要守住的仍然是
+    策略安全半径 ``d_min`` 本身。若这里也取 ``d_min + margin``，前馈就从
+    "留出切角空间"变成了"偷偷抬高安全约束"，那才是真正的口径污染。
+    """
+    astar = astar_effective_params(algo, platform)
+    bspline = algo.get("bspline") or {}
+    return {
+        "kappa_max": float(astar["kappa_max"]),
+        "d_min": float(astar["d_min"]),
+        "e_budget": float(astar["e_budget"]),
+        "clearance_margin_m": float(astar["clearance_margin_m"]),
+        "control_spacing_m": float(bspline.get("control_spacing_m", 0.8)),
+        "rdp_epsilon_m": float(bspline.get("rdp_epsilon_m", 0.15)),
+        "sample_step_m": float(bspline.get("sample_step_m", 0.02)),
+        "max_insert_depth": int(bspline.get("max_insert_depth", 3)),
+    }
+
+
+def dwa_effective_params(
+    algo: Mapping[str, Any], platform: Mapping[str, Any]
+) -> dict[str, Any]:
+    """DWA 参数：窗口来自 platform，权重/阈值/时域来自 algo，约束共用 astar/comfort。
+
+    归属（交接文档 7.9 第 7 条，全部来自配置，core 只接收数值）：
+
+    * ``v_max`` / ``w_max`` / ``a_max`` / ``alpha_max`` -> **platform**（物理上限）
+    * ``horizon`` / ``dt`` / 权重 / 采样数 -> **algo.dwa**
+    * ``a_y_max`` -> **algo.comfort.a_y_max**（与 A*、B 样条同属舒适性硬约束）
+    * ``d_min`` -> **algo.astar.d_min**（策略半径，与全局层同一个口径）
+    * ``v_nominal`` -> **algo.astar.v_cruise**（全局层标称巡航速度）
+    """
+    astar = astar_effective_params(algo, platform)
+    dw = algo.get("dwa") or {}
+    comfort = algo.get("comfort") or {}
+    return {
+        "v_max": float(platform["v_max"]),
+        "w_max": float(platform["w_max"]),
+        "a_max": float(platform["a_max"]),
+        "alpha_max": float(platform["alpha_max"]),
+        "horizon_s": float(dw.get("horizon", 0.6)),
+        "dt_s": float(dw.get("dt", 0.1)),
+        "v_samples": int(dw.get("v_samples", 9)),
+        "w_samples": int(dw.get("w_samples", 15)),
+        "d_min": float(astar["d_min"]),
+        # 物理外接圆：来自 platform，与地图膨胀/碰撞判定同一个量（阻断 1）
+        "body_radius": float(platform["body_radius"]),
+        "v_nominal": float(astar["v_cruise"]),
+        "a_y_max": float(comfort.get("a_y_max", 0.8)),
+        "jerk_weight": float(dw.get("jerk_weight", 0.15)),
+        "w_heading": float(dw.get("w_heading", 0.1)),
+        "w_dist": float(dw.get("w_dist", 0.5)),
+        "w_vel": float(dw.get("w_vel", 0.3)),
+        "w_clearance": float(dw.get("w_clearance", 0.2)),
+        "gap_head_on_m": float(dw.get("gap_head_on_m", 0.6)),
+        "gap_overtake_m": float(dw.get("gap_overtake_m", 0.25)),
+        "lateral_deviation_max_m": float(dw.get("lateral_deviation_max_m", 0.6)),
     }
 
 

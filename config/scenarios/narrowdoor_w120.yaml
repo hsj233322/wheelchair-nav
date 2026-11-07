@@ -1,7 +1,7 @@
 id: narrowdoor_w120
-content_hash: 6ffc5106d8803d9ddb11cebcd2f25cf4f72fe9db4d6f5c6c936e0f9f5c82be11
+content_hash: 9c420f06cc04a1a30b90985f44eb916865762b08c80a20cb1a0b0832cbbe3031
 source: {dataset: synthetic, file: 'env/build_scenarios.py::_narrow_door_walls', sha256: 658183452c745bf2fc027dcd071b24fcb3f673c78f9a7f1c3620f0ec40bdacb0, url: 'https://github.com/TeaganLi/HouseExpo', version: n/a, license: n/a, note: 受控门洞宽度的合成场景，用于通过性实验}
-description: 两房间 + 中间隔墙门洞 1.2 m 的受控场景（合成，非 HouseExpo 户型）；地形材质沿用 config/terrain_rules.yaml 的假设。
+description: 两房间 + 中间隔墙门洞 1.2 m 的受控场景（合成，非 HouseExpo 户型）；地形材质取 config/terrain_rules.yaml 的 default_class（受控因子，非实测）。
 map:
   resolution: 0.05
   shape: [88, 168]
@@ -17,9 +17,9 @@ map:
 start: [1.2, 2.2]
 goal: [7.2, 2.2]
 terrain:
-  default: {c_rr: 0.02, slope_deg: 0.0}
+  default: {c_rr: 0.03, slope_deg: 0.0, label_zh: 水泥地面（含室外水泥）}
   patches: []
-  note: 基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml
+  note: 受控实验因子：真实户型几何 + 按受控面积占比叠加的材质分区；c_rr 取值来自公开文献范围，非实测标定。
 quality:
   path_len_m: 6.05
   room_label_changes: 1

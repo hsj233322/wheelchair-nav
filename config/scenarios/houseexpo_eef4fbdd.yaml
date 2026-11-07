@@ -1,7 +1,7 @@
 id: houseexpo_eef4fbdd
-content_hash: 4b2e11766a5aba2cf37e8a9b46d794e69e522bd0bccf48ed6d52a2111c7bc632
+content_hash: b70f1ef144ca13bdff37ed1fb2d7b839cf129c048eb871933cf4750472b5bb3d
 source: {dataset: HouseExpo, file: eef4fbdd950ea6dc4cf6b64523f04b94.json, sha256: 9df6bb5e3708822347d9968affda86764c0668831c9009d9114f494dfd666839, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261230}
-description: HouseExpo eef4fbdd：3 个房间，由外轮廓多边形与房间包围盒转换；地形标签为基于房间类型的假设，非实测数据。
+description: HouseExpo eef4fbdd：3 个房间，由外轮廓多边形与房间包围盒转换；地形材质为**受控实验因子**（真实几何 + 按受控占比叠加的材质分区），非实测材质分布。
 map:
   resolution: 0.1
   shape: [64, 135]
@@ -41,25 +41,151 @@ map:
 start: [1.25, 2.15]
 goal: [9.25, 2.05]
 terrain:
-  default: {c_rr: 0.02, slope_deg: 0.0}
+  default: {c_rr: 0.03, slope_deg: 0.0, label_zh: 水泥地面（含室外水泥）, class: concrete}
   patches:
-  - id: concrete
-    rect: [8.49, 4.45, 13.56, 6.4]
-    c_rr: 0.02
+  - id: grating
+    rect: [0.1, 0.1, 1.8, 1.7]
+    c_rr: 0.06
     slope_deg: 0.0
-  - id: wood
-    rect: [0.1, 0.1, 13.56, 6.4]
-    c_rr: 0.025
+  - id: grating
+    rect: [1.8, 0.1, 3.5, 1.7]
+    c_rr: 0.06
+    slope_deg: 0.0
+  - id: grating
+    rect: [3.5, 0.1, 5.2, 1.7]
+    c_rr: 0.06
+    slope_deg: 0.0
+  - id: grating
+    rect: [5.2, 0.1, 6.9, 1.7]
+    c_rr: 0.06
+    slope_deg: 0.0
+  - id: concrete
+    rect: [6.9, 0.1, 8.6, 1.7]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [8.6, 0.1, 10.3, 1.7]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [10.3, 0.1, 12.0, 1.7]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [12.0, 0.1, 13.56, 1.7]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [0.1, 1.7, 1.8, 3.3]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [1.8, 1.7, 3.5, 3.3]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [3.5, 1.7, 5.2, 3.3]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [5.2, 1.7, 6.9, 3.3]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [6.9, 1.7, 8.6, 3.3]
+    c_rr: 0.03
     slope_deg: 0.0
   - id: tile
-    rect: [0.1, 0.1, 3.28, 3.04]
+    rect: [8.6, 1.7, 10.3, 3.3]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [10.3, 1.7, 12.0, 3.3]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [12.0, 1.7, 13.56, 3.3]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [0.1, 3.3, 1.8, 4.9]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [1.8, 3.3, 3.5, 4.9]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [3.5, 3.3, 5.2, 4.9]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [5.2, 3.3, 6.9, 4.9]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [6.9, 3.3, 8.6, 4.9]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [8.6, 3.3, 10.3, 4.9]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [10.3, 3.3, 12.0, 4.9]
     c_rr: 0.015
     slope_deg: 0.0
   - id: wood
-    rect: [0.1, 0.1, 13.56, 6.4]
-    c_rr: 0.025
+    rect: [12.0, 3.3, 13.56, 4.9]
+    c_rr: 0.04
     slope_deg: 0.0
-  note: 基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml
+  - id: wood
+    rect: [0.1, 4.9, 1.8, 6.4]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [1.8, 4.9, 3.5, 6.4]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [3.5, 4.9, 5.2, 6.4]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [5.2, 4.9, 6.9, 6.4]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [6.9, 4.9, 8.6, 6.4]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [8.6, 4.9, 10.3, 6.4]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [10.3, 4.9, 12.0, 6.4]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [12.0, 4.9, 13.56, 6.4]
+    c_rr: 0.04
+    slope_deg: 0.0
+  note: 受控实验因子：真实户型几何 + 按受控面积占比叠加的材质分区；c_rr 取值来自公开文献范围，非实测标定。
+  partition:
+    kind: controlled_factor
+    tier: mixed
+    tier_label_zh: 混合
+    zone_size_m: 2.2
+    expected_c_rr: 0.0321
+    classes:
+      tile: {c_rr: 0.015, slope_deg: 0.0, label_zh: 瓷砖 / 抛光水泥}
+      concrete: {c_rr: 0.03, slope_deg: 0.0, label_zh: 水泥地面（含室外水泥）}
+      wood: {c_rr: 0.04, slope_deg: 0.0, label_zh: 短绒地毯 / 防滑垫}
+      grating: {c_rr: 0.06, slope_deg: 0.0, label_zh: 地面格栅 / 粗糙防滑区}
+    target_shares: {tile: 0.3, concrete: 0.28, wood: 0.3, grating: 0.12}
+    zones: 32
+    note: 受控实验因子：真实户型几何 + 按受控面积占比叠加的材质分区；c_rr 取自公开文献范围，非实测标定，需配合 ±30% 敏感性分析。
 quality:
   path_len_m: 9.777
   room_label_changes: 1
@@ -69,7 +195,7 @@ quality:
   largest_component_ratio: 1.0
   clearance_min_m: 0.712
   clearance_p10_m: 0.75
-  clearance_median_m: 1.784
+  clearance_median_m: 1.382
   clearance_below_090_ratio: 0.3654
   clearance_threshold_m: 0.9
   bottleneck_width_m: 1.499
@@ -77,8 +203,8 @@ quality:
   bottleneck_min_width_m: 1.423
   interface_widths_m: [1.5]
   min_interface_width_m: 1.5
-  terrain_ratios: {wood: 1.0}
-  default_terrain_ratio: 0.0
+  terrain_ratios: {concrete: 0.3094, grating: 0.0916, tile: 0.4197, wood: 0.1793}
+  default_terrain_ratio: 0.3094
   grade: hard
   group: houseexpo
   tier_declared: hard

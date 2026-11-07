@@ -216,25 +216,39 @@ def test_inflation_larger_than_d_min_is_rejected(tmp_path: Path) -> None:
 
 
 def test_terrain_classes_match_runner_reconstruction(tmp_path: Path) -> None:
+    """受控材质分区：``material_class_grid`` 与场景 ``terrain.patches`` 必须逐单元一致。
+
+    这是"同一份材质不会被两处代码各算一遍"的锁定：生成器用
+    ``env/terrain_partition.py`` 出分区，runner 用 ``terrain.patches`` 重建 ``c_rr``，
+    两者如果采样规则不一致，路线上的地形占比就会是错的。
+    """
     scenario, _ = build(tmp_path, ROOM, tier=scene_quality.EASY)
-    _, _, rules = load_configs()
-    plan = floorplan.load_floorplan(tmp_path / "plan.json")
-    rows, cols = scenario["map"]["shape"]
-    grid = floorplan.terrain_class_grid(
-        plan.rooms,
-        (rows, cols),
-        scenario["map"]["resolution"],
-        scenario["map"]["origin"],
-        rules.room_type_to_class,
-        default_class=rules.default_class,
-        generic_types=rules.generic_types,
-    )
     scene = experiment.build_scene(scenario)
-    for class_name, props in rules.classes.items():
+    mapping = {
+        str(name): float(props["c_rr"])
+        for name, props in (scenario["terrain"]["partition"]["classes"]).items()
+    }
+    grid = build_scenarios.terrain_partition_grid_from_scenario(scenario, scene)
+    assert grid.shape == scene.c_rr.shape
+    for class_name, c_rr in mapping.items():
         mask = grid == class_name
         if mask.any():
-            assert np.allclose(scene.c_rr[mask], props["c_rr"])
-    assert (grid == "tile").any() and (grid == "wood").any()
+            assert np.allclose(scene.c_rr[mask], c_rr)
+    # 四档材质都要在自由区里出现（受控因子覆盖论文材质表）
+    free = ~scene.occupancy
+    present = {float(value) for value in np.unique(scene.c_rr[free])}
+    assert present == {0.015, 0.030, 0.040, 0.060}
+    # 实际占比与目标占比的偏差必须很小（整块不可分带来的量化误差）
+    realized = {
+        name: float((grid[free] == name).mean()) for name in mapping
+    }
+    for name, target in scenario["terrain"]["partition"]["target_shares"].items():
+        assert realized[name] == pytest.approx(float(target), abs=0.06)
+
+    # 同一户型同一材质档两次生成必须逐字段一致（确定性）
+    again, _ = build(tmp_path, ROOM, tier=scene_quality.EASY)
+    assert again["terrain"] == scenario["terrain"]
+    assert again["content_hash"] == scenario["content_hash"]
 
 
 # ---------------------------------------------------------------------------

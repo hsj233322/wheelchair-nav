@@ -1,7 +1,7 @@
 id: houseexpo_384ec5cb
-content_hash: d8050b079900e3d2c1cc3e4ee05016b4fdc81cb45e5b187fd8d9cff4dbd38797
+content_hash: e18bf1b9e5cd254c485031ef72daab031eb1704e6c0107c264fb74af427694d5
 source: {dataset: HouseExpo, file: 384ec5cb362e6b4b6712b0a837167ed1.json, sha256: 9b2cabf14b781820d7a8078046e1a2a62d5d9aa47384003e224e6874202f7d5a, url: 'https://github.com/TeaganLi/HouseExpo', version: 45e2b2505f6ea1fe49c0203f14efb7ce20b94e7c, license: MIT, note: env/build_scenarios.py 生成；seed=20261227}
-description: HouseExpo 384ec5cb：10 个房间，由外轮廓多边形与房间包围盒转换；地形标签为基于房间类型的假设，非实测数据。
+description: HouseExpo 384ec5cb：10 个房间，由外轮廓多边形与房间包围盒转换；地形材质为**受控实验因子**（真实几何 + 按受控占比叠加的材质分区），非实测材质分布。
 map:
   resolution: 0.1
   shape: [97, 144]
@@ -133,49 +133,279 @@ map:
 start: [1.85, 4.95]
 goal: [10.45, 2.85]
 terrain:
-  default: {c_rr: 0.02, slope_deg: 0.0}
+  default: {c_rr: 0.03, slope_deg: 0.0, label_zh: 水泥地面（含室外水泥）, class: concrete}
   patches:
+  - id: grating
+    rect: [0.1, 0.1, 1.9, 1.4]
+    c_rr: 0.06
+    slope_deg: 0.0
+  - id: grating
+    rect: [1.9, 0.1, 3.7, 1.4]
+    c_rr: 0.06
+    slope_deg: 0.0
+  - id: grating
+    rect: [3.7, 0.1, 5.5, 1.4]
+    c_rr: 0.06
+    slope_deg: 0.0
+  - id: grating
+    rect: [5.5, 0.1, 7.3, 1.4]
+    c_rr: 0.06
+    slope_deg: 0.0
+  - id: grating
+    rect: [7.3, 0.1, 9.1, 1.4]
+    c_rr: 0.06
+    slope_deg: 0.0
+  - id: grating
+    rect: [9.1, 0.1, 10.9, 1.4]
+    c_rr: 0.06
+    slope_deg: 0.0
+  - id: grating
+    rect: [10.9, 0.1, 12.7, 1.4]
+    c_rr: 0.06
+    slope_deg: 0.0
+  - id: grating
+    rect: [12.7, 0.1, 14.46, 1.4]
+    c_rr: 0.06
+    slope_deg: 0.0
+  - id: concrete
+    rect: [0.1, 1.4, 1.9, 2.6]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [1.9, 1.4, 3.7, 2.6]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [3.7, 1.4, 5.5, 2.6]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [5.5, 1.4, 7.3, 2.6]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [7.3, 1.4, 9.1, 2.6]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [9.1, 1.4, 10.9, 2.6]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [10.9, 1.4, 12.7, 2.6]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [12.7, 1.4, 14.46, 2.6]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [0.1, 2.6, 1.9, 3.8]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [1.9, 2.6, 3.7, 3.8]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [3.7, 2.6, 5.5, 3.8]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [5.5, 2.6, 7.3, 3.8]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [7.3, 2.6, 9.1, 3.8]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [9.1, 2.6, 10.9, 3.8]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [10.9, 2.6, 12.7, 3.8]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [12.7, 2.6, 14.46, 3.8]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [0.1, 3.8, 1.9, 5.0]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [1.9, 3.8, 3.7, 5.0]
+    c_rr: 0.03
+    slope_deg: 0.0
+  - id: concrete
+    rect: [3.7, 3.8, 5.5, 5.0]
+    c_rr: 0.03
+    slope_deg: 0.0
   - id: tile
-    rect: [6.18, 0.1, 9.37, 4.18]
+    rect: [5.5, 3.8, 7.3, 5.0]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [7.3, 3.8, 9.1, 5.0]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [9.1, 3.8, 10.9, 5.0]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [10.9, 3.8, 12.7, 5.0]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [12.7, 3.8, 14.46, 5.0]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [0.1, 5.0, 1.9, 6.2]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [1.9, 5.0, 3.7, 6.2]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [3.7, 5.0, 5.5, 6.2]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [5.5, 5.0, 7.3, 6.2]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [7.3, 5.0, 9.1, 6.2]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [9.1, 5.0, 10.9, 6.2]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [10.9, 5.0, 12.7, 6.2]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [12.7, 5.0, 14.46, 6.2]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [0.1, 6.2, 1.9, 7.4]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [1.9, 6.2, 3.7, 7.4]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [3.7, 6.2, 5.5, 7.4]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [5.5, 6.2, 7.3, 7.4]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [7.3, 6.2, 9.1, 7.4]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [9.1, 6.2, 10.9, 7.4]
+    c_rr: 0.015
+    slope_deg: 0.0
+  - id: tile
+    rect: [10.9, 6.2, 12.7, 7.4]
     c_rr: 0.015
     slope_deg: 0.0
   - id: wood
-    rect: [0.1, 0.1, 3.17, 4.17]
-    c_rr: 0.025
+    rect: [12.7, 6.2, 14.46, 7.4]
+    c_rr: 0.04
     slope_deg: 0.0
   - id: wood
-    rect: [3.08, 0.1, 6.27, 4.18]
-    c_rr: 0.025
+    rect: [0.1, 7.4, 1.9, 8.6]
+    c_rr: 0.04
     slope_deg: 0.0
   - id: wood
-    rect: [0.1, 5.68, 3.17, 9.76]
-    c_rr: 0.025
-    slope_deg: 0.0
-  - id: concrete
-    rect: [0.1, 4.07, 6.27, 6.28]
-    c_rr: 0.02
-    slope_deg: 0.0
-  - id: concrete
-    rect: [6.17, 3.59, 8.37, 7.77]
-    c_rr: 0.02
-    slope_deg: 0.0
-  - id: tile
-    rect: [9.28, 0.1, 14.46, 4.81]
-    c_rr: 0.015
+    rect: [1.9, 7.4, 3.7, 8.6]
+    c_rr: 0.04
     slope_deg: 0.0
   - id: wood
-    rect: [8.28, 4.08, 14.46, 9.76]
-    c_rr: 0.025
-    slope_deg: 0.0
-  - id: concrete
-    rect: [6.18, 7.64, 8.37, 9.76]
-    c_rr: 0.02
+    rect: [3.7, 7.4, 5.5, 8.6]
+    c_rr: 0.04
     slope_deg: 0.0
   - id: wood
-    rect: [3.08, 5.68, 6.27, 9.76]
-    c_rr: 0.025
+    rect: [5.5, 7.4, 7.3, 8.6]
+    c_rr: 0.04
     slope_deg: 0.0
-  note: 基于房间类型的假设，非实测数据；映射规则见 config/terrain_rules.yaml
+  - id: wood
+    rect: [7.3, 7.4, 9.1, 8.6]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [9.1, 7.4, 10.9, 8.6]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [10.9, 7.4, 12.7, 8.6]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [12.7, 7.4, 14.46, 8.6]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [0.1, 8.6, 1.9, 9.76]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [1.9, 8.6, 3.7, 9.76]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [3.7, 8.6, 5.5, 9.76]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [5.5, 8.6, 7.3, 9.76]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [7.3, 8.6, 9.1, 9.76]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [9.1, 8.6, 10.9, 9.76]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [10.9, 8.6, 12.7, 9.76]
+    c_rr: 0.04
+    slope_deg: 0.0
+  - id: wood
+    rect: [12.7, 8.6, 14.46, 9.76]
+    c_rr: 0.04
+    slope_deg: 0.0
+  note: 受控实验因子：真实户型几何 + 按受控面积占比叠加的材质分区；c_rr 取值来自公开文献范围，非实测标定。
+  partition:
+    kind: controlled_factor
+    tier: mixed
+    tier_label_zh: 混合
+    zone_size_m: 2.2
+    expected_c_rr: 0.0321
+    classes:
+      tile: {c_rr: 0.015, slope_deg: 0.0, label_zh: 瓷砖 / 抛光水泥}
+      concrete: {c_rr: 0.03, slope_deg: 0.0, label_zh: 水泥地面（含室外水泥）}
+      wood: {c_rr: 0.04, slope_deg: 0.0, label_zh: 短绒地毯 / 防滑垫}
+      grating: {c_rr: 0.06, slope_deg: 0.0, label_zh: 地面格栅 / 粗糙防滑区}
+    target_shares: {tile: 0.3, concrete: 0.28, wood: 0.3, grating: 0.12}
+    zones: 64
+    note: 受控实验因子：真实户型几何 + 按受控面积占比叠加的材质分区；c_rr 取自公开文献范围，非实测标定，需配合 ±30% 敏感性分析。
 quality:
   path_len_m: 11.694
   room_label_changes: 4
@@ -184,17 +414,17 @@ quality:
   unreachable_ratio: 0.375
   largest_component_ratio: 0.625
   clearance_min_m: 0.712
-  clearance_p10_m: 0.75
+  clearance_p10_m: 0.744
   clearance_median_m: 0.75
   clearance_below_090_ratio: 0.9502
   clearance_threshold_m: 0.9
   bottleneck_width_m: 1.499
-  bottleneck_crossings: 6
+  bottleneck_crossings: 7
   bottleneck_min_width_m: 1.423
   interface_widths_m: [1.5, 1.5, 1.7, 1.711]
   min_interface_width_m: 1.5
-  terrain_ratios: {concrete: 0.0689, tile: 0.2574, wood: 0.6737}
-  default_terrain_ratio: 0.0689
+  terrain_ratios: {concrete: 0.3223, grating: 0.0917, tile: 0.3032, wood: 0.2827}
+  default_terrain_ratio: 0.3223
   grade: hard
   group: houseexpo
   tier_declared: hard

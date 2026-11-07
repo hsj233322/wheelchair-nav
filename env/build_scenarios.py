@@ -33,14 +33,14 @@ import math
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import yaml
 from scipy import ndimage
 
 from core import astar
-from env import floorplan, scene_quality
+from env import floorplan, scene_quality, terrain_partition
 from runner import config as config_module
 from runner import experiment
 
@@ -54,10 +54,17 @@ _RULES_KEYS = {
     "version",
     "default_class",
     "classes",
-    "generic_room_types",
-    "room_type_to_class",
+    "material_partition",
     "note",
 }
+_PARTITION_KEYS = {
+    "version",
+    "zone_size_m",
+    "default_tier",
+    "min_free_cells",
+    "tiers",
+}
+_CLASS_KEYS = {"c_rr", "slope_deg", "label_zh", "description"}
 _SELECTION_KEYS = {"version", "note", "min_path_len_m", "easy_min_path_len_m", "tiers"}
 _MAX_ABS_SLOPE_DEG = 30.0
 
@@ -68,12 +75,15 @@ class SkipScene(Exception):
 
 @dataclass(frozen=True)
 class TerrainRules:
-    """``config/terrain_rules.yaml`` 的内容；仅用于把房间类型映射成材质。"""
+    """``config/terrain_rules.yaml`` 的内容（**受控材质因子**）。
+
+    场景层的地形是"真实户型几何 + 按受控面积占比叠加的材质分区"，不是实测材质
+    分布；材质库与三档占比目标全部来自配置，代码不写死任何 ``c_rr``。
+    """
 
     default_class: str
-    classes: dict[str, dict[str, float]]
-    room_type_to_class: dict[str, str]
-    generic_types: tuple[str, ...]
+    classes: dict[str, dict[str, Any]]
+    partition: terrain_partition.PartitionConfig
     note: str
 
 
@@ -87,12 +97,16 @@ class Selection:
 
 
 def load_terrain_rules(path: str | Path) -> TerrainRules:
-    """读取并校验地形规则；规则属于假设，不参与三层模型参数。"""
+    """读取并校验地形规则（材质库 + 受控材质分布三档）。
+
+    规则属于**受控实验因子**，不参与三层模型参数，也不进 config hash；
+    它决定的是场景文件里的 ``terrain.patches``（因此进场景 content_hash）。
+    """
     doc = config_module.read_config(path)
     unknown = sorted(set(doc) - _RULES_KEYS)
     if unknown:
         raise config_module.ConfigError(f"terrain_rules 含未知字段: {', '.join(unknown)}")
-    for key in ("default_class", "classes", "room_type_to_class"):
+    for key in ("default_class", "classes", "material_partition"):
         if key not in doc:
             raise config_module.ConfigError(f"terrain_rules 缺少必填字段: {key}")
 
@@ -100,14 +114,18 @@ def load_terrain_rules(path: str | Path) -> TerrainRules:
     raw_classes = doc["classes"]
     if not isinstance(raw_classes, dict) or not raw_classes:
         raise config_module.ConfigError("terrain_rules.classes 必须是非空映射")
-    classes: dict[str, dict[str, float]] = {}
+    classes: dict[str, dict[str, Any]] = {}
     for name, props in raw_classes.items():
         if not isinstance(props, dict):
             raise config_module.ConfigError(f"terrain_rules.classes.{name} 必须是映射")
-        unknown_props = sorted(set(props) - {"c_rr", "slope_deg"})
+        unknown_props = sorted(set(props) - _CLASS_KEYS)
         if unknown_props:
             raise config_module.ConfigError(
                 f"terrain_rules.classes.{name} 含未知字段: {', '.join(unknown_props)}"
+            )
+        if "c_rr" not in props or "slope_deg" not in props:
+            raise config_module.ConfigError(
+                f"terrain_rules.classes.{name} 必须有 c_rr 与 slope_deg"
             )
         c_rr = float(props["c_rr"])
         slope = float(props["slope_deg"])
@@ -117,34 +135,100 @@ def load_terrain_rules(path: str | Path) -> TerrainRules:
             raise config_module.ConfigError(
                 f"terrain_rules.classes.{name}.slope_deg 超出 ±{_MAX_ABS_SLOPE_DEG}"
             )
-        classes[str(name)] = {"c_rr": c_rr, "slope_deg": slope}
+        classes[str(name)] = {
+            "c_rr": c_rr,
+            "slope_deg": slope,
+            "label_zh": str(props.get("label_zh", name)),
+        }
     if default_class not in classes:
         raise config_module.ConfigError(
             f"terrain_rules.default_class = {default_class!r} 不在 classes 里"
         )
 
-    raw_mapping = doc["room_type_to_class"]
-    if not isinstance(raw_mapping, dict):
-        raise config_module.ConfigError("terrain_rules.room_type_to_class 必须是映射")
-    mapping: dict[str, str] = {}
-    for room_type, class_name in raw_mapping.items():
-        normalized = floorplan.normalize_category(str(room_type))
-        class_name = str(class_name)
-        if class_name not in classes:
-            raise config_module.ConfigError(
-                f"terrain_rules.room_type_to_class.{room_type} = {class_name!r} 不在 classes 里"
-            )
-        mapping[normalized] = class_name
-
-    generic = doc.get("generic_room_types", [])
-    if not isinstance(generic, (list, tuple)):
-        raise config_module.ConfigError("terrain_rules.generic_room_types 必须是列表")
-    generic_types = tuple(floorplan.normalize_category(str(item)) for item in generic)
+    partition = load_partition_config(doc["material_partition"], classes, default_class)
     return TerrainRules(
         default_class=default_class,
         classes=classes,
-        room_type_to_class=mapping,
-        generic_types=generic_types,
+        partition=partition,
+        note=str(doc.get("note", "")),
+    )
+
+
+def load_partition_config(
+    doc: Mapping[str, Any],
+    classes: Mapping[str, Mapping[str, Any]],
+    default_class: str,
+) -> terrain_partition.PartitionConfig:
+    """``terrain_rules.material_partition`` -> :class:`PartitionConfig`。"""
+    if not isinstance(doc, Mapping):
+        raise config_module.ConfigError("terrain_rules.material_partition 必须是映射")
+    unknown = sorted(set(doc) - _PARTITION_KEYS)
+    if unknown:
+        raise config_module.ConfigError(
+            f"terrain_rules.material_partition 含未知字段: {', '.join(unknown)}"
+        )
+    zone_size_m = float(doc.get("zone_size_m", 2.2))
+    if not zone_size_m > 0:
+        raise config_module.ConfigError(
+            f"material_partition.zone_size_m 必须 > 0，实际为 {zone_size_m}"
+        )
+    min_free_cells = int(doc.get("min_free_cells", 4))
+    if min_free_cells < 1:
+        raise config_module.ConfigError("material_partition.min_free_cells 必须 >= 1")
+    default_tier = str(doc.get("default_tier", terrain_partition.MIXED))
+    raw_tiers = doc.get("tiers")
+    if not isinstance(raw_tiers, Mapping) or not raw_tiers:
+        raise config_module.ConfigError("material_partition.tiers 必须是非空映射")
+
+    material_classes = {
+        name: terrain_partition.MaterialClass(
+            name=name,
+            c_rr=float(props["c_rr"]),
+            slope_deg=float(props["slope_deg"]),
+            label_zh=str(props.get("label_zh", name)),
+        )
+        for name, props in classes.items()
+    }
+
+    tiers: dict[str, terrain_partition.TerrainTier] = {}
+    for tier_name, raw_shares in raw_tiers.items():
+        tier_name = str(tier_name)
+        if not isinstance(raw_shares, Mapping) or not raw_shares:
+            raise config_module.ConfigError(
+                f"material_partition.tiers.{tier_name} 必须是非空映射"
+            )
+        shares: dict[str, float] = {}
+        for class_name, share in raw_shares.items():
+            class_name = str(class_name)
+            if class_name not in material_classes:
+                raise config_module.ConfigError(
+                    f"material_partition.tiers.{tier_name} 引用了未定义材质 {class_name!r}"
+                )
+            value = float(share)
+            if not value >= 0:
+                raise config_module.ConfigError(
+                    f"material_partition.tiers.{tier_name}.{class_name} 必须 >= 0"
+                )
+            shares[class_name] = value
+        total = sum(shares.values())
+        if abs(total - 1.0) > 1e-6:
+            raise config_module.ConfigError(
+                f"material_partition.tiers.{tier_name} 的占比之和必须为 1，实际为 {total}"
+            )
+        tiers[tier_name] = terrain_partition.TerrainTier(
+            name=tier_name, shares=shares
+        )
+    if default_tier not in tiers:
+        raise config_module.ConfigError(
+            f"material_partition.default_tier = {default_tier!r} 不在 tiers 里"
+        )
+    return terrain_partition.PartitionConfig(
+        zone_size_m=zone_size_m,
+        default_tier=default_tier,
+        classes=material_classes,
+        tiers=tiers,
+        default_class=default_class,
+        min_free_cells=min_free_cells,
         note=str(doc.get("note", "")),
     )
 
@@ -190,32 +274,101 @@ def _clip_rect(
 
 
 def _scenario_patches(
-    plan: floorplan.FloorPlan,
+    zones: Sequence[terrain_partition.MaterialZone],
     rules: TerrainRules,
     bounds: tuple[float, float, float, float],
 ) -> list[dict[str, Any]]:
-    """房间包围盒 -> terrain.patches（按确定顺序，后画覆盖先画）。"""
-    ordered = floorplan.ordered_room_boxes(
-        plan.rooms,
-        rules.room_type_to_class,
-        default_class=rules.default_class,
-        generic_types=rules.generic_types,
+    """材质分区 -> ``terrain.patches``（按确定顺序，后画覆盖先画）。"""
+    return terrain_partition.zones_to_patches(
+        zones, rules.partition.classes, bounds=bounds
     )
-    patches: list[dict[str, Any]] = []
-    for class_name, rect in ordered:
-        x0, y0, x1, y1 = _clip_rect(rect, bounds)
-        if x1 <= x0 or y1 <= y0:
-            continue
-        props = rules.classes[class_name]
-        patches.append(
-            {
-                "id": class_name,
-                "rect": [round(x0, 6), round(y0, 6), round(x1, 6), round(y1, 6)],
-                "c_rr": props["c_rr"],
-                "slope_deg": props["slope_deg"],
+
+
+def terrain_partition_for(
+    occupancy: np.ndarray,
+    resolution: float,
+    origin: tuple[float, float],
+    rules: TerrainRules,
+    *,
+    tier: str,
+    zone_size_m: float | None = None,
+) -> tuple[list[terrain_partition.MaterialZone], np.ndarray]:
+    """占据栅格 -> （材质分区, 逐单元材质名网格）。
+
+    **自由区 = 轮廓内的可通行区域**（``~occupancy``，即 ``clearance > 0``），
+    与安全半径无关：材质是地面属性，不该随 ``d_min`` 改变。
+    """
+    free = ~np.asarray(occupancy, dtype=bool)
+    return terrain_partition.partition_free_area(
+        free,
+        resolution,
+        origin,
+        rules.partition,
+        tier=tier,
+        zone_size_m=zone_size_m,
+        min_free_cells=rules.partition.min_free_cells,
+    )
+
+
+def terrain_partition_grid_from_scenario(
+    scenario: Mapping[str, Any], scene: experiment.Scene
+) -> np.ndarray:
+    """从**已固化的场景**重建逐单元材质名网格（与 runner 的 patches 采样一致）。
+
+    采样规则与 :func:`runner.experiment.build_scene` 相同：单元中心落在矩形内即命中，
+    后画覆盖先画。分析模块用它做"路线上的 ``c_rr`` 分布"，不需要重新生成分区。
+    """
+    rows, cols = (int(scene.occupancy.shape[0]), int(scene.occupancy.shape[1]))
+    terrain = scenario["terrain"]
+    grid = np.full(
+        (rows, cols), "__free__", dtype="<U16"
+    )  # 先填一个不会与材质名冲突的占位
+    xs = float(scene.origin[0]) + (np.arange(cols) + 0.5) * scene.resolution
+    ys = float(scene.origin[1]) + (np.arange(rows) + 0.5) * scene.resolution
+    for patch in terrain.get("patches", []):
+        x0, y0, x1, y1 = (float(value) for value in patch["rect"])
+        mask = ((xs >= x0) & (xs <= x1))[None, :] & ((ys >= y0) & (ys <= y1))[:, None]
+        grid[mask] = str(patch["id"])
+    grid[grid == "__free__"] = str(
+        (terrain.get("default") or {}).get("class", "default")
+    )
+    return grid
+
+
+def _partition_metadata(
+    rules: TerrainRules,
+    *,
+    tier: str,
+    zones: Sequence[terrain_partition.MaterialZone],
+    zone_size_m: float,
+) -> dict[str, Any]:
+    """写进场景 ``terrain.partition`` 的受控因子声明（论文可追溯用）。"""
+    return {
+        "kind": "controlled_factor",
+        "tier": str(tier),
+        "tier_label_zh": terrain_partition.TIER_LABELS_ZH.get(str(tier), str(tier)),
+        "zone_size_m": round(float(zone_size_m), 3),
+        "expected_c_rr": round(
+            terrain_partition.expected_c_rr(rules.partition.tier(tier), rules.partition.classes),
+            5,
+        ),
+        "classes": {
+            name: {
+                "c_rr": float(props["c_rr"]),
+                "slope_deg": float(props["slope_deg"]),
+                "label_zh": str(props["label_zh"]),
             }
-        )
-    return patches
+            for name, props in rules.classes.items()
+        },
+        "target_shares": {
+            name: float(share) for name, share in rules.partition.tier(tier).shares.items()
+        },
+        "zones": int(len(zones)),
+        "note": (
+            "受控实验因子：真实户型几何 + 按受控面积占比叠加的材质分区；"
+            "c_rr 取自公开文献范围，非实测标定，需配合 ±30% 敏感性分析。"
+        ),
+    }
 
 
 def _scenario_dict(
@@ -228,13 +381,14 @@ def _scenario_dict(
     patches: list[dict[str, Any]],
     inflation_m: float,
     default_class: str,
-    classes: dict[str, dict[str, float]],
+    classes: dict[str, dict[str, Any]],
     note: str,
     start: tuple[float, float],
     goal: tuple[float, float],
     quality: dict[str, Any],
     seed: int,
     prefix: str = DEFAULT_PREFIX,
+    partition: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scenario: dict[str, Any] = {
         "id": f"{prefix}_{plan.id[:8]}",
@@ -250,7 +404,8 @@ def _scenario_dict(
         },
         "description": (
             f"HouseExpo {plan.id[:8]}：{plan.room_num} 个房间，"
-            f"由外轮廓多边形与房间包围盒转换；地形标签为基于房间类型的假设，非实测数据。"
+            f"由外轮廓多边形与房间包围盒转换；地形材质为**受控实验因子**"
+            f"（真实几何 + 按受控占比叠加的材质分区），非实测材质分布。"
         ),
         "map": {
             "resolution": resolution,
@@ -265,32 +420,19 @@ def _scenario_dict(
         "start": [round(start[0], 6), round(start[1], 6)],
         "goal": [round(goal[0], 6), round(goal[1], 6)],
         "terrain": {
-            "default": dict(classes[default_class]),
+            "default": {
+                **dict(classes[default_class]),
+                "class": str(default_class),
+            },
             "patches": patches,
             "note": note,
         },
         "quality": quality,
     }
+    if partition is not None:
+        scenario["terrain"]["partition"] = partition
     scenario["content_hash"] = config_module.compute_scenario_hash(scenario)
     return scenario
-
-
-def _class_grid(
-    plan: floorplan.FloorPlan,
-    rules: TerrainRules,
-    shape: tuple[int, int],
-    resolution: float,
-    origin: tuple[float, float],
-) -> np.ndarray:
-    return floorplan.terrain_class_grid(
-        plan.rooms,
-        shape,
-        resolution,
-        origin,
-        rules.room_type_to_class,
-        default_class=rules.default_class,
-        generic_types=rules.generic_types,
-    )
 
 
 def build_one(
@@ -307,8 +449,15 @@ def build_one(
     max_attempts: int,
     min_start_goal_m: float = 4.0,
     prefix: str = DEFAULT_PREFIX,
+    terrain_tier: str | None = None,
+    zone_size_m: float | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """把一个 HouseExpo JSON 变成指定难度档的场景；不达标时抛 :class:`SkipScene`。"""
+    """把一个 HouseExpo JSON 变成指定难度档的场景；不达标时抛 :class:`SkipScene`。
+
+    ``tier`` 是**难度档**（easy/medium/hard，只看瓶颈宽度）；
+    ``terrain_tier`` 是**材质分布档**（low_resistance/mixed/high_resistance，
+    受控实验因子），默认按 ``plan_id`` 哈希确定性地分配到其中一档。
+    """
     source_path = Path(source_path)
     plan = floorplan.load_floorplan(source_path)
     bounds = plan.bbox
@@ -338,8 +487,27 @@ def build_one(
     )
     components = scene_quality.component_stats(free)
     pairs = scene_quality.room_pair_analysis(clearance, segmentation.labels, free, resolution)
-    patches = _scenario_patches(plan, rules, bounds)
-    class_grid = _class_grid(plan, rules, (rows, cols), resolution, origin)
+
+    # 受控材质因子：材质档由 plan_id 派生（不随采样随机数漂移），
+    # 几何完全来自真实户型；分区覆盖**全部自由区**（clearance > 0）。
+    resolved_terrain_tier = str(
+        terrain_tier or terrain_partition.tier_for_plan(plan.id, tuple(rules.partition.tiers))
+    )
+    active_zone_size = float(
+        zone_size_m if zone_size_m is not None else rules.partition.zone_size_m
+    )
+    zones, class_grid = terrain_partition_for(
+        occupancy,
+        resolution,
+        origin,
+        rules,
+        tier=resolved_terrain_tier,
+        zone_size_m=active_zone_size,
+    )
+    patches = _scenario_patches(zones, rules, bounds)
+    partition_meta = _partition_metadata(
+        rules, tier=resolved_terrain_tier, zones=zones, zone_size_m=active_zone_size
+    )
 
     def world(cell: np.ndarray) -> tuple[float, float]:
         return (
@@ -390,6 +558,7 @@ def build_one(
         quality={},
         seed=seed,
         prefix=prefix,
+        partition=partition_meta,
     )
     scene = experiment.build_scene(probe)
 
@@ -455,6 +624,7 @@ def build_one(
             quality=quality_dict,
             seed=seed,
             prefix=prefix,
+            partition=partition_meta,
         )
         config_module.validate_scenario(scenario)
         experiment.build_scene(scenario)
@@ -462,6 +632,7 @@ def build_one(
             "id": scenario["id"],
             "group": "houseexpo",
             "tier": tier,
+            "terrain_tier": resolved_terrain_tier,
             "grade": quality.grade,
             "shape": [rows, cols],
             "n_components": quality.n_components,
@@ -552,7 +723,7 @@ def build_narrow_door(
         },
         "description": (
             f"两房间 + 中间隔墙门洞 {width_m:.1f} m 的受控场景（合成，非 HouseExpo 户型）；"
-            f"地形材质沿用 config/terrain_rules.yaml 的假设。"
+            f"地形材质取 config/terrain_rules.yaml 的 default_class（受控因子，非实测）。"
         ),
         "map": {
             "resolution": resolution,
@@ -670,6 +841,7 @@ METADATA_COLUMNS = (
     "id",
     "group",
     "tier",
+    "terrain_tier",
     "grade",
     "path_len_m",
     "room_label_changes",
@@ -704,6 +876,7 @@ def write_metadata(rows: Sequence[dict[str, Any]], path: Path) -> None:
             record["shape_cols"] = row["shape"][1]
             record["start"] = f"{row['start'][0]},{row['start'][1]}"
             record["goal"] = f"{row['goal'][0]},{row['goal'][1]}"
+            record.setdefault("terrain_tier", "")
             writer.writerow({key: record[key] for key in METADATA_COLUMNS})
 
 
@@ -734,6 +907,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="起终点最小直线距离（不超过房间对测地距离的 0.6 倍）",
     )
     parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    parser.add_argument(
+        "--terrain-tier", default=None,
+        choices=list(terrain_partition.TIER_IDS),
+        help=(
+            "材质分布档（受控因子）。默认按 plan_id 哈希确定性分配到低阻/混合/高阻三档之一；"
+            "指定后本批场景全部使用该档"
+        ),
+    )
+    parser.add_argument(
+        "--zone-size-m", type=float, default=None,
+        help="材质分区目标边长 [m]（默认取 terrain_rules.material_partition.zone_size_m）",
+    )
     parser.add_argument(
         "--only", default=None,
         help="只生成指定档位（easy/medium/hard/narrow），逗号分隔",
@@ -800,6 +985,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         max_attempts=args.max_attempts,
                         min_start_goal_m=args.min_start_goal_m,
                         prefix=args.prefix,
+                        terrain_tier=args.terrain_tier,
+                        zone_size_m=args.zone_size_m,
                     )
                 except (SkipScene, config_module.ConfigError) as exc:
                     skipped += 1
@@ -810,7 +997,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 rows.append(info)
                 written += 1
                 print(
-                    f"OK   {info['tier']:<6} {info['id']:<20} {info['shape'][0]:>3}x{info['shape'][1]:<3} "
+                    f"OK   {info['tier']:<6} {info['terrain_tier']:<16} {info['id']:<20} "
+                    f"{info['shape'][0]:>3}x{info['shape'][1]:<3} "
                     f"len={info['path_len_m']:>6.2f} m label_chg={info['room_label_changes']} "
                     f"rooms={info['rooms_visited']} c_min={info['clearance_min_m']:.2f} "
                     f"below0.9={info['clearance_below_090_ratio']:.2f} "
@@ -855,6 +1043,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"resolution={args.resolution} m (narrow {args.narrow_resolution} m), "
         f"seed={args.seed}, physical_radius={physical_radius(platform):.2f} m "
         f"(platform.body_radius), base_d_min={algo['astar']['d_min']} m (algo), "
+        f"terrain_tier={args.terrain_tier or 'per-plan(auto)'} "
+        f"zone_size_m={args.zone_size_m or rules.partition.zone_size_m} m, "
         f"metadata -> {args.metadata_out}"
     )
     return 0 if written else 1
