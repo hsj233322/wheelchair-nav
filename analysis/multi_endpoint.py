@@ -161,6 +161,64 @@ def sample_ports(
     return samples
 
 
+def _trial_scene(
+    scene: experiment.Scene,
+    start_xy: tuple[float, float],
+    goal_xy: tuple[float, float],
+) -> experiment.Scene:
+    """把场景的起终点换成给定端点（单元随之重算）。"""
+    return replace(
+        scene,
+        start_xy=start_xy,
+        goal_xy=goal_xy,
+        start_cell=astar.world_to_cell(start_xy, scene.resolution, scene.origin),
+        goal_cell=astar.world_to_cell(goal_xy, scene.resolution, scene.origin),
+    )
+
+
+def _evaluate_length_only(
+    scene: experiment.Scene,
+    baseline_setup: experiment.PlannerSetup,
+    start_xy: tuple[float, float],
+    goal_xy: tuple[float, float],
+) -> tuple[float, float] | None:
+    """仅长度 A*（``d_min = body_radius``）的 ``(length_m, energy_j)``。"""
+    result = chapter3._plan(
+        _trial_scene(scene, start_xy, goal_xy), baseline_setup, baseline_setup.astar_params
+    )
+    if not result.success:
+        return None
+    return float(result.length_m), float(result.total_energy_j)
+
+
+def _evaluate_esa(
+    scene: experiment.Scene,
+    baseline_setup: experiment.PlannerSetup,
+    start_xy: tuple[float, float],
+    goal_xy: tuple[float, float],
+) -> tuple[float, float] | None:
+    """能耗加权 A*（ESA*）的 ``(length_m, energy_j)``。
+
+    复现口径与 ``analysis/chapter3.run_planner_scenario`` 一致：先收
+    ``collect_pareto`` 非支配集取最小能耗点，再把能耗预算压到该点重跑一次，
+    反解出那条路径本身。
+    """
+    trial = _trial_scene(scene, start_xy, goal_xy)
+    base = baseline_setup.astar_params
+    front = chapter3._plan(trial, baseline_setup, replace(base, collect_pareto=True))
+    if not front.success or front.pareto_energy_j.size == 0:
+        return None
+    e_min = float(front.pareto_energy_j[int(np.argmin(front.pareto_energy_j))])
+    tight = chapter3._plan(
+        trial,
+        baseline_setup,
+        replace(base, e_budget=e_min * (1.0 + 1e-9) + 1e-9),
+    )
+    if not tight.success:
+        tight = front
+    return float(tight.length_m), float(tight.total_energy_j)
+
+
 def _evaluate_port(
     *,
     scene: experiment.Scene,
@@ -194,7 +252,7 @@ def _evaluate_port(
         goal=(round(goal_xy[0], 4), round(goal_xy[1], 4)),
     )
 
-    constrained = chapter3._plan(trial, setup, base)
+    constrained = chapter3._plan(_trial_scene(scene, start_xy, goal_xy), setup, base)
     if not constrained.success:
         return TaskOutcome(
             **blank, feasible=False, reason=str(constrained.reason),
@@ -207,23 +265,16 @@ def _evaluate_port(
     baseline_setup = replace(
         setup, astar_params=replace(base, d_min=body_radius, collect_pareto=False)
     )
-    length_only = chapter3._plan(trial, baseline_setup, baseline_setup.astar_params)
+    length_only = _evaluate_length_only(scene, baseline_setup, start_xy, goal_xy)
     front = chapter3._plan(
-        trial, baseline_setup, replace(baseline_setup.astar_params, collect_pareto=True)
+        _trial_scene(scene, start_xy, goal_xy),
+        baseline_setup,
+        replace(baseline_setup.astar_params, collect_pareto=True),
     )
     points = list(zip(front.pareto_length_m, front.pareto_energy_j))
-    esa_length = esa_energy = 0.0
-    if front.success and front.pareto_energy_j.size:
-        index = int(np.argmin(front.pareto_energy_j))
-        e_min = float(front.pareto_energy_j[index])
-        tight = chapter3._plan(
-            trial,
-            baseline_setup,
-            replace(baseline_setup.astar_params, e_budget=e_min * (1.0 + 1e-9) + 1e-9),
-        )
-        if not tight.success:
-            tight = front
-        esa_length, esa_energy = float(tight.length_m), float(tight.total_energy_j)
+    esa = _evaluate_esa(scene, baseline_setup, start_xy, goal_xy)
+    esa_length, esa_energy = esa if esa is not None else (0.0, 0.0)
+    len_length, len_energy = length_only if length_only is not None else (0.0, 0.0)
 
     return TaskOutcome(
         **blank,
@@ -246,10 +297,10 @@ def _evaluate_port(
         ),
         esa_length_m=esa_length,
         esa_energy_j=esa_energy,
-        len_length_m=float(length_only.length_m),
-        len_energy_j=float(length_only.total_energy_j),
-        esa_minus_len_length_m=esa_length - float(length_only.length_m),
-        esa_minus_len_energy_j=esa_energy - float(length_only.total_energy_j),
+        len_length_m=len_length,
+        len_energy_j=len_energy,
+        esa_minus_len_length_m=esa_length - len_length,
+        esa_minus_len_energy_j=esa_energy - len_energy,
     )
 
 

@@ -1,0 +1,139 @@
+# ETH/UCY 行人序列声明 + **锚点映射**（数据集局部坐标 -> 场景世界坐标）
+#
+# 数据获取方式、版本与许可证见 `data/README.md`；原始 txt 放 `data/eth_ucy/`
+# （**不进 git**，与 HouseExpo 同一个约定）。本文件进 git，因为它决定了
+# "同一份数据会被怎么放到户型里"，属于**可复现性的一部分**。
+#
+# ## 为什么需要锚点
+#
+# ETH/UCY 的坐标是**各自场地的局部坐标**（ETH 校园 / 酒店大堂 / 火车站前街道 /
+# UCY 校园），原点与朝向与 HouseExpo 户型毫无关系。把行人放进户型必须显式声明
+#
+#     xy_world = scale * R(rotation_deg) @ xy_local + origin_xy
+#
+# 这三个量就是锚点映射。它们**不是**可以随手挑的自由参数：
+#
+# * `scale` 默认 **1.0**（数据本身就是米）。缩放会连带改变步行速度，所以只有在
+#   有独立依据时才允许 != 1；本框架固定 1.0，保真实尺度与真实步速。
+# * `rotation_deg` / `origin_xy` 由 `env/pedestrians.py::fit_anchor` 依据
+#   **场景几何**（自由区最大内接矩形 + 行人圆与墙的冲突率）确定到一个具体值：
+#   给定 (序列, 场景) 与搜索参数，结果唯一。逐 (场景, 序列) 的实际取值记录在
+#   `docs/pedestrian_anchor.csv`，并进任务表的哈希。
+# * 若某序列在某个户型里**怎么摆都冲突率很高**（场地尺度 > 户型可用空间），
+#   那说明"这个序列与这个户型几何上放不下" —— 报告它，而不是把 scale 调小去凑。
+#
+# ## 字段
+#
+# `sequences.<name>`：
+#   * `file`：`data/eth_ucy/` 下的文件名；
+#   * `venue`：原始场地（报告里标注数据来源）；
+#   * `fps` / `frame_step`：采样率与帧步长（自检用，数据集恒为 2.5 fps / 10）；
+#   * `extent_m`：局部坐标包围盒 [m]（自检用，帮助判断"放不放得下"）；
+#   * `note`：来源与版本说明。
+version: 1
+
+# 行人物理半径 [m]：与 DWA 的手工轨迹保持一致（0.30 m），
+# 因此会车净宽判据 2(R + r_o) = 2 x (0.58 + 0.30) = 1.76 m 可以直接沿用。
+pedestrian_radius_m: 0.30
+
+# 锚点映射的约束（fit_anchor 的搜索空间与口径）
+anchor:
+  scale: 1.0                 # 固定 1.0：保真实尺度与真实步速
+  rotation_step_deg: 5.0     # 旋转角搜索网格 [deg]
+  offset_half_range_m: 2.0   # 平移搜索范围（相对自由区最大内接矩形中心）[m]
+  offset_step_m: 0.5         # 平移搜索网格 [m]
+  free_clearance_m: 0.90     # 用哪一档安全半径定义"可用矩形"（> d_min，留裕度）
+  max_conflict_ratio: 0.25   # 拟合后冲突率高于该值的 (场景, 序列) 判为"几何上放不下"
+
+# 时间对齐
+time_alignment:
+  dt_s: 0.1                  # 重采样步长 [s]（数据集 0.4 s -> 加密到 0.1 s）
+  max_observation_gap_s: 0.6 # 相邻观测间隔超过该值即视为"观测空洞"，不跨空洞插值
+                             # （必须 > 数据集自身 0.4 s 步长；取 1.5 x 0.4 = 0.6）
+  max_consecutive_wall_crossings: 3   # 连续穿墙样本数超过该值 -> 该观测段整体丢弃
+  min_samples: 10            # 单段可用轨迹至少要有多少个采样点（1.0 s）
+  velocity_window: 5         # 速度平滑窗口（奇数，5 个周期 = 0.5 s，与 DWA 时域同量级）
+
+sequences:
+  eth:
+    file: eth.txt
+    venue: ETH 校园（BIWI 标注）
+    fps: 2.5
+    frame_step: 10
+    extent_m: [22.1, 16.4]
+    note: "StanfordASL/Trajectron-plus-plus raw/eth/test/biwi_eth.txt（原始 ETH 序列）"
+  hotel:
+    file: hotel.txt
+    venue: ETH 酒店大堂
+    fps: 2.5
+    frame_step: 10
+    extent_m: [7.6, 14.5]
+    note: "raw/eth/train/biwi_hotel_train.txt"
+  zara01:
+    file: zara01.txt
+    venue: UCY 苏黎世火车站前街道（第 1 段）
+    fps: 2.5
+    frame_step: 10
+    extent_m: [15.6, 12.7]
+    note: "raw/eth/train/crowds_zara01_train.txt"
+  zara02:
+    file: zara02.txt
+    venue: UCY 苏黎世火车站前街道（第 2 段）
+    fps: 2.5
+    frame_step: 10
+    extent_m: [15.8, 14.2]
+    note: "raw/eth/train/crowds_zara02_train.txt"
+  zara03:
+    file: zara03.txt
+    venue: UCY 苏黎世火车站前街道（第 3 段）
+    fps: 2.5
+    frame_step: 10
+    extent_m: [15.9, 12.8]
+    note: "raw/eth/train/crowds_zara03_train.txt"
+  students001:
+    file: students001.txt
+    venue: UCY 校园（students001）
+    fps: 2.5
+    frame_step: 10
+    extent_m: [15.9, 14.1]
+    note: "raw/eth/train/students001_train.txt"
+  students003:
+    file: students003.txt
+    venue: UCY 校园（students003）
+    fps: 2.5
+    frame_step: 10
+    extent_m: [15.6, 14.0]
+    note: "raw/eth/train/students003_train.txt"
+  uni_examples:
+    file: uni_examples.txt
+    venue: UCY 大学（uni_examples）
+    fps: 2.5
+    frame_step: 10
+    extent_m: [16.0, 13.8]
+    note: "raw/eth/train/uni_examples_train.txt"
+
+# 本轮的实验设计：哪些 (场景, 序列) 组合进入指标统计。
+# **由几何决定，不是挑出来的**：规则 = 拟合冲突率 <= anchor.max_conflict_ratio。
+# 逐组合的实际冲突率见 docs/pedestrian_anchor.csv。
+task_design:
+  sequence_source: "all"          # 用 sequences 里的全部序列
+  scene_filter: "anchor_conflict_ratio <= anchor.max_conflict_ratio"
+  t_offset_rule: "seed"           # 行人时间窗起点由 seed 决定（计入哈希）
+  window_s: 40.0                  # 每个 episode 的观察窗 [s]
+  start_goal_rule: "frozen"       # 起终点沿用冻结任务，不重新采样
+  # **拥挤度是受控量**（不是"越挤越好"）：
+  max_pedestrians_in_window: 12      # episode 里最多保留多少条行人轨迹
+  crowd_rule: "nearest_to_reference" # 保留离参考路径最近的那批，其余记入被剔除数
+  target_pedestrians_in_window: 15   # 期望的拥挤度（仅用于报告对照，可能不可达）
+  note: >
+    户型 x 序列 的笛卡尔积。观察窗起点在"窗口内不同行人数"最接近
+    target_pedestrians_in_window 的位置里按 seed 确定性选取；随后按
+    crowd_rule 把 episode 内的行人限制到 max_pedestrians_in_window 条。
+    为什么拥挤度必须受控：① 科学上，不同序列/场景的 episode 必须拥挤度可比，
+    否则指标差异里混进"哪个窗口更挤"这个混杂因素；② 工程上，局部层对每个候选
+    逐个行人做标量运算，成本 ∝ 候选数 x 行人数 x 周期数（实测 93 人 = 76 s/episode，
+    12 人 ≈ 10 s），拥挤度失控会让全量跑不完。
+    **注意拥挤度在时间窗层面不可控**：实测 students003 的*每一个* 40 s 窗口里都有
+    93~134 个不同行人，所以只能在轨迹层面筛选。
+    逐 episode 的实际条数与被剔除条数记在 docs/dwa_metrics_eth_ucy.csv 的
+    pedestrians_in_window / pedestrians_crowd_dropped 两列，**必须一起报告**。

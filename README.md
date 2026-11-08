@@ -31,6 +31,8 @@ uv run python -m analysis.dwa_gapfix_compare             # 动态间距判据修
 uv run python -m analysis.chapter3                       # 第 3 章：规划器对比 / Pareto / 软硬对照
 uv run python -m analysis.terrain --sensitivity          # 受控材质因子：c_rr 分布 + ±30%/P_aux 敏感性
 uv run python -m analysis.multi_endpoint --jobs 8        # 多端点对任务：同户型多组起终点
+uv run python -m analysis.energy_gain_groups --jobs 8    # 能耗收益按高阻占比分组（第 3 章口径）
+uv run python -m analysis.pedestrians --jobs 8           # ETH/UCY 真实行人接入（第 4 章）
 ```
 
 场景质量档案汇总在 `docs/scene_metadata.csv`（每个场景一行：路径长度、房间标签变化、
@@ -68,6 +70,7 @@ wheelchair-nav/
   env/                     # 公开数据集 -> core 能吃的数组
     floorplan.py           # HouseExpo JSON -> 占据栅格（纯函数）
     terrain_partition.py   # 受控材质因子：自由区 -> 连通矩形分区 -> 材质（纯函数）
+    pedestrians.py         # ETH/UCY -> 锚点映射 / 重采样 / 筛选 / ObstacleTrack（纯函数）
     scene_quality.py       # 房间分割 / 标签变化 / clearance 硬指标 / 难度分档（纯函数）
     screen_floorplans.py   # 批量筛查户型能否跨房间 -> docs/floorplan_screening.csv
     build_scenarios.py     # 户型 -> 冻结场景 YAML（分档采样 + A* 验证 + 质量档案 + 内容哈希）
@@ -84,6 +87,8 @@ wheelchair-nav/
     chapter3.py            # 第 3 章：规划器对比 / Pareto 前沿 / 软硬对照 -> docs/chapter3*
     terrain.py             # 受控材质因子：c_rr 分布/路线覆盖 + ±30%/P_aux 敏感性
     multi_endpoint.py      # 多端点对任务：同一户型多组起终点 -> docs/chapter3_multi_endpoint.csv
+    energy_gain_groups.py  # 能耗收益按主路线高阻占比分组 -> docs/energy_gain_groups*.csv
+    pedestrians.py         # ETH/UCY：锚点表 / 可用性统计 / 三类指标 / 两类图
   data/                    # HouseExpo 候选池（不进 git；来源与取样规则见 data/README.md）
   docs/preview/            # 里程碑验收图
   docs/smooth/             # B 样条验收图（叠图 / 曲率剖面 / 前后对比）
@@ -110,6 +115,12 @@ wheelchair-nav/
   docs/terrain_route_coverage.csv  # 候选路线上的 c_rr 长度加权占比
   docs/terrain_sensitivity.csv     # c_rr ±30% 与 P_aux 敏感性
   docs/terrain/            # 材质分布直方图 / 路线叠图 / 敏感性图
+  docs/energy_gain_groups.csv / _summary.csv   # 能耗收益分组（逐任务 / 分组汇总）
+  docs/energy_gain_groups*_paux0.csv           # 同一批任务的 P_aux = 0 口径对照
+  docs/pedestrian_anchor.csv       # 逐 (场景, 序列) 的锚点映射（原点/旋转/缩放）
+  docs/pedestrian_usability.csv    # ETH/UCY 可用性：可用/出界/穿墙比例
+  docs/dwa_metrics_eth_ucy.csv     # 真实行人下的动态层三类指标
+  docs/pedestrians/        # 行人轨迹叠户型图 / 机器人+行人联合轨迹 / 接触分解
   docs/floorplan_screening.csv  # 260 个候选户型的筛查结果
   tests/
   results/                 # 每次运行一个目录（git 忽略）
@@ -904,6 +915,53 @@ AStarParams(enforce_dmin=True,             # 默认：d_min 是硬约束（违�
 * **要更密的前沿就用多端点对任务**（见「受控材质因子 → 多端点对任务」）：
   附加 40 个端口把多点任务做到 11/60，且 easy / medium / hard 都有。
 
+### 2b. 能耗收益的分组分析：收益取决于**任务是否经过高阻地形**
+
+```bash
+uv run python -m analysis.energy_gain_groups                    # 60 个任务（20 冻结 + 40 附加）
+uv run python -m analysis.energy_gain_groups --ports-per-scenario 0   # 只看 20 个冻结任务
+uv run python -m analysis.energy_gain_groups --p-aux 0 --suffix _paux0  # 简化能耗模型对照
+```
+
+分组依据是**主路线（本文约束化 A*）上高阻材质（`c_rr >= 0.04`）的**路段长度加权**占比**：
+低 < 10% / 中 10~40% / 高 > 40%。**配对差**是硬要求（交接文档 7.8 口径规则 1）：
+同一任务、同一可行域（两者都用 `d_min = body_radius`），只换目标函数。
+
+| 组 | 任务 | 高阻占比范围 | **Δ能耗中位 [J]** | Δ能耗总和 [J] | 多走中位 [m] | 省电任务 |
+|---|---|---|---|---|---|---|
+| 低（< 10%） | 30 | 0.00 ~ 0.08 | **0.00** | 84.60 | 0.000 | 9 |
+| 中（10% ~ 40%） | 15 | 0.10 ~ 0.34 | **0.485** | 134.31 | 0.000 | 8 |
+| 高（> 40%） | 15 | 0.40 ~ 1.00 | **0.975** | 21.36 | 0.000 | 9 |
+
+* **中位收益严格单调上升（0.00 → 0.485 → 0.975 J）**，与预期一致：
+  路线上的高阻材质越多，"绕远走低阻"能省的电越多；完全走在低阻材质上的任务
+  几乎没有优化空间（中位 0，省电的 9 个任务都是"同长度下能耗更低的 tie-break"）。
+* **总和列不单调，必须如实报告**：低阻组的总和被 2 个大任务主导
+  （`8bb3c35d` 的 p1 端口 −56.6 J、`64b86794` 的 p1 端口 −27.0 J）。它们恰好落在
+  低阻组、也是"同长度 tie-break"，却因为分母大而贡献了绝大部分总和 ——
+  **这正是"总和会被少数大任务带偏、中位数才反映典型收益"的例证**。
+  论文里两个数都要给，并说明这一点，不能只挑中位数。
+* 逐任务明细与图：`docs/energy_gain_groups.csv`、
+  `docs/chapter3/energy_gain_groups.png`（左：高阻占比 vs 收益散点；右：分组中位/总和）。
+
+### 2c. 与已发表论文的 26% **不可并列对比**（口径声明）
+
+本课题已发表的小论文报告过 **26%** 的能耗优化空间。本框架在真实户型上测到的是
+**总能耗 −1.09%、单任务最多 −9.65%**。**两个数字不得并列对比**，因为口径有三处根本差异：
+
+| 维度 | 已发表小论文 | 本框架 |
+|---|---|---|
+| 地图 | **随机栅格**，高阻地形近似**满铺** | **真实 HouseExpo 户型**，高阻材质按受控面积占比分区（20 个场景实际高阻占比 14%~66%） |
+| 能耗模型 | **简化模型**：只有滚阻与坡度项 | **完整模型**：滚阻 + 坡度 + 惯性 + 传动效率 + 电池内阻 + **辅助功率 `P_aux`** |
+| `P_aux` 占比 | 0（模型里没有这一项） | 约占参考能耗 **1/3**（15 W / 1 m/s ≈ 15 J/m，实测 `c_rr = 0.03` 时约 23 J/m 地形项） |
+
+**为什么满铺 + 简化模型会放大收益**：能耗 = 地形项 + **与时间成正比的辅助项**。
+`P_aux` 项对**所有路线**都按时间等量叠加，因此它不区分"走哪条路"，只会稀释
+地形项之间的相对差。去掉它、再把高阻铺满，收益自然被放大。
+
+**量化这条差异**（`docs/energy_gain_groups_summary_paux0.csv`，同 60 个任务、只把
+`P_aux` 置 0）：见下一节表格。这是**口径对照**，不是"本框架的另一个结果"。
+
 ### 3. 软惩罚 vs 硬约束（`docs/chapter3_soft_summary.csv`）
 
 | 方案 | 任务 | 长度中位 [m] | 能耗中位 [J] | 违反率（按长度） | 违反任务 | **物理穿行率**（< 0.58 m） | 最小离障 最小 [m] |
@@ -1013,6 +1071,125 @@ uv run python -m analysis.dmin_sweep --max-samples 24   # 4 档 x 20 场景 x �
 （起点/终点取自 `docs/dmin_sweep.csv` 的 `resampled_start/goal`，路径 18.54 m、瓶颈 1.50 m）；
 0.90 档被重新采样救回来的中档场景见 `docs/preview/houseexpo_1241c62f__resampled_dmin090.png`。
 
+## ETH/UCY 真实行人接入（`env/pedestrians.py`，2026-11-08）
+
+```bash
+uv run python -m analysis.pedestrians --jobs 8                 # 锚点 + 可用性 + 三类指标 + 图
+uv run python -m analysis.pedestrians --sequences eth --jobs 2  # 只跑一个序列
+uv run python -m analysis.pedestrians --anchor-only --jobs 8    # 只做锚点与可用性统计
+```
+
+数据获取、版本、许可证与逐文件对应表见 `data/README.md`
+（`data/eth_ucy/` 8 个序列、62 334 行，**不进 git**）。
+
+### 锚点映射：把场地局部坐标放进户型
+
+ETH/UCY 的坐标属于各自场地（ETH 校园 / 酒店大堂 / 火车站前街道 / UCY 校园），
+原点与朝向与 HouseExpo 户型**毫无关系**，所以必须显式声明
+
+```
+xy_world = scale * R(rotation_deg) @ xy_local + origin_xy
+```
+
+* `scale` **固定 1.0**：数据本身就是米，缩放会连带改变步行速度（第一条纪律：
+  不靠缩小数据去"凑"可用率）；
+* `rotation_deg` / `origin_xy` 由 `env/pedestrians.py::fit_anchor` 依据**场景几何**
+  搜索确定 —— 自由区最大内接矩形定中心，旋转角 5° 网格 × 平移 0.5 m 网格，
+  目标函数是"行人圆（半径 `body_radius`）与墙冲突的样本比例"最小。
+  给定 (序列, 场景) 与搜索参数，**结果唯一**；逐组合的实际取值见
+  `docs/pedestrian_anchor.csv`。
+* **性能**：朴素实现单组合 ≈ 72 角度 × 81 平移 × 18 353 行 ≈ 1 亿次逐点运算
+  （几十秒）；现在每个角度只旋转一次、平移只做整数格点偏移 + 一次 `np.take`
+  变址，实测 **0.98 s**（`students001`，18 353 行）。这是本轮"跑得慢"的主因，
+  已在函数 docstring 里写明原因，避免下次再踩。
+
+### 时间对齐与可用性筛选
+
+* **重采样**：数据集帧步长恒为 10、**2.5 fps（0.4 s）**，重采样到 `dt = 0.1 s`
+  是**加密**（帧数 = `floor(ΔT/dt) + 1`），不是抽稀；
+* **不跨观测空洞插值**：`observation_runs` 按"相邻观测间隔 > 0.6 s"切段，
+  插值只在段内进行。**这条是必须的**：ETH 的 `eth.txt` 帧号有 60/70/90 的大步长，
+  跨空洞插值会**凭空造出**行人从未走过的直线运动（再被穿墙筛选剔掉，污染统计）；
+* **速度**：重采样后的中心差分 + 0.5 s 滑动平均（`velocity_window = 5`）。
+  直接对 0.4 s 原始帧做差分会把标注噪声放大 4 倍，而 DWA 的绕行判据用相对运动
+  方向 δ，速度方向抖动会让判据在相邻周期反复翻转；
+* **三条筛选**（比例同分母 = 连续观测段内重采样后的样本数）：
+  ① 出界（栅格之外）剔除；② 穿墙（圆心离墙 `< body_radius`）剔除；
+  ③ **连续**穿墙超过 3 个周期 → 该观测段整体丢弃。逐点剔除后按连续可用段切分，
+  时间轴出现空洞就断开（否则插值会让行人瞬移穿过被剔除的墙段）。
+
+### 结果（`docs/pedestrian_usability.csv`、`docs/dwa_metrics_eth_ucy.csv`）
+
+<!-- ETH_UCY_RESULTS_START -->
+
+**规模**：160 个 (场景, 序列) 组合（20 个冻结场景 × 8 个序列）。其中 **88 个通过锚点拟合并执行**，**72 个因参考轨迹不可跟踪被跳过**（`polyline/clearance` 或 `polyline/curvature`，见 7.8/7.9 红线：回退折线不是可跟踪的参考轨迹，不得进入局部规划）。
+
+**拥挤度是受控量**：episode 内保留的行人轨迹中位 **12** 条（上限 12，均值 10.0），按「离参考路径最近」选取；因此另有 **866 条**（29/88 个 episode）因拥挤度受控被排除。两个数并列给出，不隐藏取舍。其中 **2 个 episode 的观察窗内没有任何行人**（等价于无障碍任务，按 DWA 表既有口径不进入动态分母，单独列出）。
+
+**口径**：三条可用性比例同分母 = 连续观测段内按 `dt` 重采样后的样本数；「窗口内样本可用率」= 观察窗的 0.1 s 栅格中，至少有 1 条行人轨迹覆盖的格子占比。
+
+**① 可用性统计**（全序列口径；逐 (场景, 序列) 明细见 `docs/pedestrian_usability.csv`）
+
+| 序列 | 组合 | 可用行人比例 | 出界比例 | 穿墙比例 | 样本可用率 | 窗口内样本可用率 | 丢弃段 |
+|---|---|---|---|---|---|---|---|
+| `eth` | 11 | 0.647 | 0.034 | 0.084 | 0.623 | 0.339 | 1287 |
+| `hotel` | 11 | 0.759 | 0.004 | 0.061 | 0.805 | 0.483 | 599 |
+| `students001` | 11 | 0.428 | 0.043 | 0.113 | 0.429 | 0.836 | 2241 |
+| `students003` | 11 | 0.475 | 0.049 | 0.105 | 0.455 | 0.910 | 2051 |
+| `uni_examples` | 11 | 0.604 | 0.020 | 0.092 | 0.586 | 0.711 | 418 |
+| `zara01` | 11 | 0.664 | 0.019 | 0.071 | 0.656 | 0.780 | 459 |
+| `zara02` | 11 | 0.599 | 0.016 | 0.064 | 0.624 | 0.886 | 746 |
+| `zara03` | 11 | 0.613 | 0.019 | 0.074 | 0.611 | 0.874 | 438 |
+
+**② 动态层三类指标**（86 个**有行人**的 episode；成功 = 到达 ∧ 无物理违反；`timeout` 不算成功）
+
+| 序列 | 任务 | 到达 | 超时 | **主动碰撞帧** | 被动接触帧 | 已停∧W<1.76 | 接触任务 | 最小圆心距 [m] |
+|---|---|---|---|---|---|---|---|---|
+| `eth` | 11 | 5 | 6 | **0** | 519 | 282 | 2 | 0.295 |
+| `hotel` | 11 | 6 | 5 | **0** | 0 | 0 | 0 | 1.015 |
+| `students001` | 11 | 5 | 6 | **0** | 233 | 0 | 1 | 0.200 |
+| `students003` | 11 | 4 | 7 | **0** | 270 | 33 | 3 | 0.352 |
+| `uni_examples` | 11 | 6 | 5 | **0** | 245 | 0 | 1 | 0.155 |
+| `zara01` | 10 | 5 | 5 | **0** | 591 | 591 | 1 | 0.145 |
+| `zara02` | 11 | 8 | 3 | **0** | 0 | 0 | 0 | 1.109 |
+| `zara03` | 10 | 9 | 1 | **0** | 0 | 0 | 0 | 1.364 |
+| **合计** | 86 | 48 | 38 | **0** | 1858 | 906 | 8 | 0.145 |
+
+**③ 三类结论**（全文不使用「零碰撞」这一说法）：
+
+> ① **主动碰撞 = 0 帧**（必须为 0，否则是规划器 bug）
+> ② **被动接触 = 1858 帧**（8/86 个 episode 出现），其中「本车已停 ∧ 瓶颈 < 1.76 m」= 906 帧；这是**真人不避让机器人**的必然代价
+> ③ **未完成（超时）= 38 个**；到达 48/86
+
+**按难度档 / 材质档分解**
+
+| 分组 | 任务 | 到达 | 超时 | 主动碰撞帧 | 被动接触帧 | 接触任务 |
+|---|---|---|---|---|---|---|
+| 档位 `easy` | 64 | 36 | 28 | 0 | 952 | 4 |
+| 档位 `hard` | 14 | 10 | 4 | 0 | 600 | 2 |
+| 档位 `medium` | 8 | 2 | 6 | 0 | 306 | 2 |
+| 材质档 `high_resistance` | 32 | 13 | 19 | 0 | 707 | 3 |
+| 材质档 `low_resistance` | 24 | 17 | 7 | 0 | 306 | 2 |
+| 材质档 `mixed` | 30 | 18 | 12 | 0 | 845 | 3 |
+
+<!-- ETH_UCY_RESULTS_END -->
+
+### 两类图
+
+| 图 | 内容 |
+|---|---|
+| `docs/pedestrians/trajectories_<序列>.png` | 行人轨迹叠在户型栅格上（颜色 = 窗口内归一化时间，末端画行人圆）+ A* 参考轨迹与起终点 |
+| `docs/pedestrians/joint_episode.png` | 一个 episode 的**机器人 + 行人联合轨迹**（参考 / 执行 / 行人足迹 + 标题给三类指标） |
+| `docs/pedestrians/contact_decomposition.png` | 接触帧二维分解（成因 × 几何可行性），画法与手工轨迹表一致 |
+
+### 预期管理（本文必须写清的外部效度代价）
+
+* **真人不避让机器人**：被动接触会大幅上升，这是接入真实数据的必然代价，
+  **不是 bug**，也**不允许**为了指标好看去修正行人轨迹或放宽判据；
+* **主动碰撞必须仍为 0 帧**（本车在推进时发生重叠）；若不为 0，是规划器问题；
+* 不可跟踪的参考轨迹**不进入局部规划**（7.9 红线），在报告里单列
+  `skipped_untrackable`，不计入指标分母。
+
 ## 下一步
 
 里程碑顺序（2026-10-25 调整，见交接文档 §7）：
@@ -1029,8 +1206,10 @@ uv run python -m analysis.dmin_sweep --max-samples 24   # 4 档 x 20 场景 x �
 6.7 第 3 章结果生成            规划器对比 / Pareto 前沿 / 软硬对照              [已完成 2026-11-06]
 6.8 受控材质因子                c_rr 四档 + 三档分布 + ±30%/P_aux 敏感性        [已完成 2026-11-07]
 6.9 多端点对任务                同户型多组起终点（第 3 章前沿补强，不进主表）      [已完成 2026-11-07]
-7. env/pedestrians.py           ETH/UCY -> 逐帧动态障碍                    <- 当前
-8. analysis/                    tables / figures，30 次重复 + Wilcoxon / Fisher
+6.10 能耗收益分组                按主路线高阻占比分组 + 与已发表论文口径差异       [已完成 2026-11-08]
+7. env/pedestrians.py           ETH/UCY 真实行人 -> 逐帧动态障碍                [已完成 2026-11-08]
+8. analysis/                    tables / figures，30 次重复 + Wilcoxon / Fisher   <- 当前
+9. DWA / MPPI 基线对比          传统 DWA / MPPI（`core/local_planner.py` 已预留协议）
 ```
 
 **第 6.5 / 6.6 项都是口径修复，不是新算法能力**：
@@ -1069,6 +1248,23 @@ B 样条里程碑留下的两个入口给 DWA：
   曲率限速（`v ≤ min(v_max, sqrt(a_y_max / |κ|))`）可以直接消费，不需要再算一遍曲率；
 * `SmoothingReport` 的 `status` / `reason` / `inserted_points` 已经把"这条任务能不能
   平滑"结构化了，第 4 章做动态层时可用它筛"静态层已经贴墙"的任务，避免把回退任务
+  ｜
   的失败错误归因给 DWA。
+
+## 性能与可复现的工程约定（2026-11-08 补充）
+
+本项目全部实验在 CPU 上跑，几个"看起来卡住"的坑已经定位清楚并写了原因，后续不要再踩：
+
+| 位置 | 坑 | 量级与做法 |
+|---|---|---|
+| `env/terrain_partition.py::quadtree_zones` | 递归二分的分区数随格子边长平方增长 | 真实场景 200~1500 个分区，正常 |
+| `env/pedestrians.py::fit_anchor` | 朴素实现把整条序列在每个 (角度, 平移) 上重新旋转+查表 | `students001` 18 353 行 × 72 角度 × 81 平移 ≈ **1 亿次**逐点运算；改为"每角度旋转一次 + 平移只做整数格点偏移 + 一次 `np.take` 变址"后 **0.98 s** |
+| `env/pedestrians.py::load_sequence` | 同一序列被 20 个场景各解析一次 | 加进程内缓存（键含 mtime）：首次 0.048 s、命中 0.0005 s |
+| `core/dwa.py::evaluate_candidate` | 对每个候选**逐个行人**调用 numpy 标量运算，成本 ∝ 候选数 × 行人数 × 周期数 | 单个 episode 实测：122 人 = 337 s、93 人 = 76 s、**12 人 = 25 s**。因此**拥挤度是必须受控的实验因子**（`config/pedestrian_sequences.yaml::task_design`），不是"越挤越好" |
+| `analysis/pedestrians.py::main` | 任务按 FIFO 下发，easy 做完的 worker 空转等 hard | hard 场景路径 20 m、easy 8 m，单 episode 成本差 2~3 倍；改为**按预估成本降序下发**（LPT），总时长从 >90 min 压到 ~40 min |
+
+**报告纪律**：任何"用了多少算力/砍了多少数据"的取舍都要写进结果表
+（例如 `pedestrians_in_window` 与 `pedestrians_crowd_dropped` 必须并列给出），
+不允许只报对自己有利的一侧。
 
 每个里程碑都要求出图，验收方式是看图，不看代码。

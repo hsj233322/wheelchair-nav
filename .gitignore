@@ -11,6 +11,15 @@ pytest-of-*/
 # HouseExpo 原始数据（体积大；取样规则与来源见 data/README.md）
 data/houseexpo/
 
+# ETH/UCY 原始行人轨迹（体积大；来源、版本与下载命令见 data/README.md）
+data/eth_ucy/
+
+# 临时脚本（标定 / 诊断）
+tmp_*.py
+
 # matplotlib 缓存（用户级缓存目录不可写时使用）
 .matplotlib/
 matplotlib-*/
+
+# 运行日志（体积大且可重跑）
+docs/*.log

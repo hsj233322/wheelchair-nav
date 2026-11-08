@@ -1,3 +1,10 @@
+# data/ ：外部数据集（体积大，不进 git）
+
+本目录只放**原始数据**与取得方式的记录；转换代码在 `env/` 下，
+转换结果落在 `config/scenarios/` 与 `docs/`（这些进 git）。
+
+---
+
 # data/houseexpo：HouseExpo 取样子集
 
 ## 来源与版本
@@ -77,3 +84,76 @@ tar -xzf /tmp/json.tar.gz -C data/houseexpo --strip-components=1 \
 * 场景固化：`env/build_scenarios.py` -> `config/scenarios/houseexpo_*.yaml`、`narrowdoor_*.yaml`
 * 质量表：`docs/scene_metadata.csv`
 * 可视化：`analysis/preview.py`
+
+---
+
+# data/eth_ucy：ETH/UCY 行人轨迹子集（2026-11-07 接入）
+
+| 项 | 值 |
+|---|---|
+| 数据集 | ETH Walking Pedestrians (BIWI) + UCY Crowds |
+| 上游仓库 | https://github.com/StanfordASL/Trajectron-plus-plus |
+| 上游路径 | `experiments/pedestrians/raw/eth/{train,test}/`（这两个数据集的**原始 obsmat 文本**镜像） |
+| 上游版本 | `master`（2026-11-07 取） |
+| 许可证 | 数据版权归原作者（BIWI / ETH / UCY）；Trajectron++ 仓库为 MIT。**仅用于学术研究**，论文须引用原始数据集论文 |
+| 取数日期 | 2026-11-07 |
+| 取数方式 | 本机到 `github.com` / `raw.githubusercontent.com` 被网络策略拦截（curl 超时 / SSL 失败），改走 **jsDelivr CDN**：`https://cdn.jsdelivr.net/gh/StanfordASL/Trajectron-plus-plus@master/experiments/pedestrians/raw/eth/<path>` |
+
+放进 `data/eth_ucy/` 的文件（**不进 git**）：
+
+| 本地文件 | 上游文件 | 序列 | 行数 | 行人 | 局部包围盒 [m] |
+|---|---|---|---|---|---|
+| `eth.txt` | `test/biwi_eth.txt` | ETH | 5492 | 360 | 22.1 × 16.4 |
+| `hotel.txt` | `train/biwi_hotel_train.txt` | Hotel | 4946 | 311 | 7.6 × 14.5 |
+| `zara01.txt` | `train/crowds_zara01_train.txt` | Zara01 | 4307 | 125 | 15.6 × 12.7 |
+| `zara02.txt` | `train/crowds_zara02_train.txt` | Zara02 | 7621 | 171 | 15.8 × 14.2 |
+| `zara03.txt` | `train/crowds_zara03_train.txt` | Zara03 | 3708 | 106 | 15.9 × 12.8 |
+| `students001.txt` | `train/students001_train.txt` | Students001 | 18353 | 375 | 15.9 × 14.1 |
+| `students003.txt` | `train/students003_train.txt` | Students003 | 15641 | 364 | 15.6 × 14.0 |
+| `uni_examples.txt` | `train/uni_examples_train.txt` | Univ | 2266 | 96 | 16.0 × 13.8 |
+
+## 格式与两条必须声明的口径
+
+1. **格式**：每行 `frame id x y`（空白分隔，无表头）；帧步长恒为 **10**，
+   采样率 **2.5 fps（0.4 s）**。本框架重采样到 `dt = 0.1 s`（**加密**，不是抽稀），
+   速度用重采样后的中心差分 + 0.5 s 滑动平均（直接对 0.4 s 原始帧差分会把标注
+   噪声放大 4 倍）。
+2. **坐标是局部场地坐标**：ETH/UCY 的坐标属于各自场地（校园 / 酒店大堂 / 火车站
+   前街道），原点与朝向与 HouseExpo 户型**毫无关系**。因此把行人放进户型必须显式
+   经过**锚点映射**（原点 / 旋转 / 缩放）：声明在
+   `config/pedestrian_sequences.yaml::anchor`，由
+   `env/pedestrians.py::fit_anchor` 依据**场景几何**（自由区最大内接矩形 +
+   行人圆与墙的冲突率）确定到一个具体值，逐 (场景, 序列) 记录在
+   `docs/pedestrian_anchor.csv`。`scale` 固定 **1.0**：缩放会连带改变步行速度，
+   本框架不靠缩小数据去"凑"可用率。
+
+## 复现下载
+
+```bash
+BASE=https://cdn.jsdelivr.net/gh/StanfordASL/Trajectron-plus-plus@master/experiments/pedestrians/raw/eth
+mkdir -p data/eth_ucy
+curl -sL "$BASE/test/biwi_eth.txt"             -o data/eth_ucy/eth.txt
+curl -sL "$BASE/train/biwi_hotel_train.txt"    -o data/eth_ucy/hotel.txt
+curl -sL "$BASE/train/crowds_zara01_train.txt" -o data/eth_ucy/zara01.txt
+curl -sL "$BASE/train/crowds_zara02_train.txt" -o data/eth_ucy/zara02.txt
+curl -sL "$BASE/train/crowds_zara03_train.txt" -o data/eth_ucy/zara03.txt
+curl -sL "$BASE/train/students001_train.txt"   -o data/eth_ucy/students001.txt
+curl -sL "$BASE/train/students003_train.txt"   -o data/eth_ucy/students003.txt
+curl -sL "$BASE/train/uni_examples_train.txt"  -o data/eth_ucy/uni_examples.txt
+```
+
+## 引用（论文参考文献）
+
+* A. Lerner, Y. Chrysanthou, D. Lischinski. *Crowds by Example.* Computer Graphics
+  Forum (Eurographics), 2007. — **UCY 数据集的原始来源**。
+* S. Pellegrini, A. Ess, K. Schindler, L. van Gool. *You'll Never Walk Alone: Modeling
+  Social Behavior for Multi-target Tracking.* ICCV, 2009. — **ETH/BIWI 数据集的原始来源**。
+* Trajectron++ / jsDelivr 只作为**文本镜像与下载通道**被引用，不是行人数据集的原始出处。
+
+## 相关代码
+
+* 读取 / 锚点 / 重采样 / 筛选 / 对接 DWA：`env/pedestrians.py`（纯函数）
+* 锚点标定与可用性统计：`analysis/pedestrians.py` -> `docs/pedestrian_anchor.csv`、
+  `docs/pedestrian_usability.csv`
+* 动态层三类指标（主动碰撞 / 被动接触 / 未完成）：`docs/dwa_metrics_eth_ucy.csv`
+* 可视化：`docs/pedestrians/*.png`
