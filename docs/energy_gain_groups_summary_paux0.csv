@@ -1,0 +1,4 @@
+group,label,tasks,high_ratio_min,high_ratio_max,high_ratio_median,gain_median_j,gain_total_j,gain_pct_median,gain_pct_total,length_delta_median_m,improved_tasks,longer_tasks
+low,低（高阻 < 10%）,30,0.0000,0.0763,0.0000,0.000,111.205,0.0000,1.2421,0.0000,9,5
+mid,中（10% ~ 40%）,15,0.1006,0.3422,0.2391,1.324,174.588,-0.5342,2.9993,0.0000,11,6
+high,高（> 40%）,15,0.4042,1.0000,0.8991,0.971,67.106,-0.1374,0.8250,0.0000,10,4
